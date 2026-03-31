@@ -1,0 +1,31 @@
+name = "cirtell-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database Binding
+# After running `npx wrangler d1 create cirtell-db`, replace the database_id below
+[[d1_databases]]
+binding = "DB"
+database_name = "cirtell-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Environment Variables (non-sensitive)
+[vars]
+FRONTEND_URL = "http://localhost:5173"
+
+# Development environment
+[env.development]
+vars = { FRONTEND_URL = "http://localhost:5173" }
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "cirtell-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Production environment — update FRONTEND_URL after deploying frontend
+# [env.production]
+# vars = { FRONTEND_URL = "https://cirtell.<your-subdomain>.workers.dev" }
+
+# Secrets (set with: wrangler secret put <NAME>)
+# GOOGLE_CLIENT_ID - Run: wrangler secret put GOOGLE_CLIENT_ID
+# JWT_SECRET      - Run: wrangler secret put JWT_SECRET

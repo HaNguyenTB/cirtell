@@ -1,0 +1,25 @@
+{
+  "name": "cirtell-api",
+  "version": "1.0.0",
+  "description": "Cirtell API - Cloudflare Workers with D1",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create cirtell-db",
+    "db:migrate:local": "wrangler d1 migrations apply cirtell-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply cirtell-db --remote"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "hono": "^4.0.0",
+    "jose": "^6.1.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260103.0",
+    "typescript": "^5.4.2",
+    "wrangler": "^4.76.0"
+  }
+}
