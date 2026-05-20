@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
 import { DashboardLayout } from './components/DashboardLayout';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
@@ -21,8 +21,8 @@ export default function App() {
           <Route path="/carbon" element={<CarbonPage />} />
           <Route path="/warehouse" element={<WarehousePage />} />
         </Route>
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   );
 }
-
