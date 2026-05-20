@@ -3,10 +3,11 @@ import { apiRequest } from '../lib/api';
 import {
   ArrowLeftRight,
   DollarSign,
-  Recycle,
   Leaf,
   Package,
+  Recycle,
   TrendingUp,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface HeadlineData {
@@ -23,16 +24,48 @@ interface HeadlineData {
 
 function SkeletonCards() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5 mb-8">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="stat-card p-5">
+        <div key={i} className="stat-card">
           <div className="flex items-center gap-3 mb-4">
-            <div className="skeleton w-10 h-10 rounded-xl" />
+            <div className="skeleton w-12 h-12 rounded-apple-xl" />
             <div className="skeleton w-24 h-3 rounded" />
           </div>
-          <div className="skeleton w-28 h-7 rounded" />
+          <div className="skeleton w-28 h-8 rounded" />
         </div>
       ))}
+    </div>
+  );
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  tone,
+  delay,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  tone: 'deep' | 'signal' | 'verified';
+  delay: number;
+}) {
+  const styles = {
+    deep: 'bg-deep-teal/15 text-deep-teal',
+    signal: 'bg-signal-teal/15 text-signal-teal',
+    verified: 'bg-verified-green/15 text-verified-green',
+  };
+
+  return (
+    <div className="stat-card animate-slide-up" style={{ animationDelay: `${delay}s`, animationFillMode: 'both' }}>
+      <div className="flex items-center gap-3 mb-4">
+        <div className={`w-12 h-12 rounded-apple-xl flex items-center justify-center ${styles[tone]}`}>
+          <Icon size={22} />
+        </div>
+        <span className="text-micro font-semibold text-gray-500 uppercase tracking-wider">{label}</span>
+      </div>
+      <p className="font-display text-tile font-semibold text-gray-900 tracking-tight">{value}</p>
     </div>
   );
 }
@@ -51,7 +84,7 @@ export function DashboardPage() {
 
   if (error) {
     return (
-      <div className="animate-slide-up bg-emerald-50 border border-emerald-200 text-emerald-800 p-5 rounded-2xl text-sm">
+      <div className="animate-slide-up bg-red-50 border border-red-200 text-red-800 p-5 rounded-apple-lg text-caption">
         {error}
       </div>
     );
@@ -63,128 +96,107 @@ export function DashboardPage() {
           label: 'Total Transactions',
           value: data.total_transactions.toLocaleString(),
           icon: ArrowLeftRight,
-          gradient: 'from-emerald-400 to-emerald-600',
-          bg: 'bg-emerald-50',
+          tone: 'signal' as const,
         },
         {
           label: 'Total Value',
           value: `$${data.total_value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
           icon: DollarSign,
-          gradient: 'from-green-500 to-emerald-700',
-          bg: 'bg-emerald-50',
+          tone: 'deep' as const,
         },
         {
           label: 'Reuse Rate',
           value: `${data.reuse_rate}%`,
           icon: Recycle,
-          gradient: 'from-lime-500 to-green-600',
-          bg: 'bg-lime-50',
+          tone: 'verified' as const,
         },
         {
-          label: 'Total CO₂e (kg)',
+          label: 'Total CO2e (kg)',
           value: data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 }),
           icon: Leaf,
-          gradient: 'from-emerald-500 to-green-700',
-          bg: 'bg-emerald-50',
+          tone: 'verified' as const,
         },
         {
           label: 'Parts in Catalog',
           value: data.total_parts.toLocaleString(),
           icon: Package,
-          gradient: 'from-green-600 to-emerald-800',
-          bg: 'bg-green-50',
+          tone: 'signal' as const,
         },
       ]
     : [];
 
   const scopes = data
     ? [
-        { label: 'Scope 1', sub: 'Direct Emissions', value: data.scope1_kg, color: 'from-lime-400 to-green-500', barColor: 'bg-lime-500' },
-        { label: 'Scope 2', sub: 'Energy Indirect', value: data.scope2_kg, color: 'from-green-500 to-emerald-600', barColor: 'bg-green-600' },
-        { label: 'Scope 3', sub: 'Value Chain', value: data.scope3_kg, color: 'from-emerald-600 to-green-800', barColor: 'bg-emerald-700' },
+        { label: 'Scope 1', sub: 'Direct Emissions', value: data.scope1_kg, color: 'bg-deep-teal' },
+        { label: 'Scope 2', sub: 'Energy Indirect', value: data.scope2_kg, color: 'bg-signal-teal' },
+        { label: 'Scope 3', sub: 'Value Chain', value: data.scope3_kg, color: 'bg-verified-green' },
       ]
     : [];
 
   const totalEmissions = data ? data.scope1_kg + data.scope2_kg + data.scope3_kg : 1;
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+    <div className="space-y-8 pb-8">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">Key performance indicators at a glance</p>
         </div>
-        <div className="hidden sm:flex items-center gap-2 text-xs text-gray-400 bg-white border border-gray-100 rounded-xl px-3 py-2">
-          <TrendingUp size={14} className="text-emerald-500" />
+        <div className="hidden sm:flex items-center gap-2 text-caption text-gray-500 bg-white border border-gray-100 rounded-apple-md px-3 py-2">
+          <TrendingUp size={14} className="text-signal-teal" />
           Live data
         </div>
       </div>
 
-      {/* KPI Cards */}
       {loading ? (
         <SkeletonCards />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
           {cards.map((card, i) => (
-            <div
-              key={card.label}
-              className="stat-card p-5 animate-slide-up"
-              style={{ animationDelay: `${i * 0.05}s`, animationFillMode: 'both' }}
-            >
-              <div className="flex items-center gap-3 mb-3">
-                <div className={`w-10 h-10 bg-gradient-to-br ${card.gradient} rounded-xl flex items-center justify-center shadow-sm`}>
-                  <card.icon size={18} className="text-white" />
-                </div>
-                <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">{card.label}</span>
-              </div>
-              <p className="text-2xl font-bold text-gray-900 tracking-tight">{card.value}</p>
-            </div>
+            <KpiCard key={card.label} {...card} delay={i * 0.05} />
           ))}
         </div>
       )}
 
-      {/* Emissions breakdown */}
       {data && (
-        <div className="stat-card p-6 animate-slide-up" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
+        <div className="stat-card animate-slide-up" style={{ animationDelay: '0.3s', animationFillMode: 'both' }}>
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">GHG Emissions Breakdown</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Kilograms of CO₂ equivalent</p>
+              <h2 className="text-lg font-semibold text-gray-900">GHG Emissions Breakdown</h2>
+              <p className="text-caption text-gray-500 mt-0.5">Kilograms of CO2 equivalent</p>
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-gray-900">{data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</p>
-              <p className="text-xs text-gray-400">Total kg CO₂e</p>
+              <p className="font-display text-tile font-semibold text-gray-900">{data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</p>
+              <p className="text-caption text-gray-500">Total kg CO2e</p>
             </div>
           </div>
 
-          {/* Stacked bar */}
-          <div className="flex h-3 rounded-full overflow-hidden bg-gray-100 mb-6">
-            {scopes.map((s) => {
-              const pct = totalEmissions > 0 ? (s.value / totalEmissions) * 100 : 0;
+          <div className="flex h-3 rounded-pill overflow-hidden bg-gray-100 mb-6">
+            {scopes.map((scope) => {
+              const pct = totalEmissions > 0 ? (scope.value / totalEmissions) * 100 : 0;
               return pct > 0 ? (
                 <div
-                  key={s.label}
-                  className={`${s.barColor} transition-all duration-500`}
+                  key={scope.label}
+                  className={`${scope.color} transition-all duration-500`}
                   style={{ width: `${pct}%` }}
-                  title={`${s.label}: ${pct.toFixed(1)}%`}
+                  title={`${scope.label}: ${pct.toFixed(1)}%`}
                 />
               ) : null;
             })}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            {scopes.map((s) => (
-              <div key={s.label} className="bg-gray-50 rounded-xl p-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {scopes.map((scope) => (
+              <div key={scope.label} className="bg-gray-50 rounded-apple-lg p-4 border border-black/[0.04]">
                 <div className="flex items-center gap-2 mb-2">
-                  <div className={`w-2.5 h-2.5 rounded-full bg-gradient-to-br ${s.color}`} />
-                  <span className="text-xs font-semibold text-gray-500">{s.label}</span>
+                  <div className={`w-2.5 h-2.5 rounded-full ${scope.color}`} />
+                  <span className="text-caption font-semibold text-gray-500">{scope.label}</span>
                 </div>
-                <p className="text-lg font-bold text-gray-900">
-                  {s.value.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                  <span className="text-xs font-normal text-gray-400 ml-1">kg</span>
+                <p className="text-sub-heading font-semibold text-gray-900">
+                  {scope.value.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                  <span className="text-caption font-normal text-gray-400 ml-1">kg</span>
                 </p>
-                <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
+                <p className="text-micro text-gray-400 mt-0.5">{scope.sub}</p>
               </div>
             ))}
           </div>

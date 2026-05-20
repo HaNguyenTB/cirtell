@@ -1,17 +1,16 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import {
+  ArrowLeftRight,
+  ArrowRight,
+  BarChart3,
+  Globe,
   Leaf,
   Package,
-  ArrowLeftRight,
-  Warehouse,
-  BarChart3,
-  ArrowRight,
-  Globe,
-  Shield,
-  Zap,
   Recycle,
-  ChevronRight,
+  Shield,
+  Warehouse,
+  Zap,
 } from 'lucide-react';
 
 const features = [
@@ -19,37 +18,37 @@ const features = [
     icon: Package,
     title: 'Parts Catalog',
     desc: 'Central registry for telecom equipment with vendor mapping, weight tracking, and emission factors.',
-    color: 'from-emerald-400 to-emerald-600',
+    tone: 'bg-signal-teal/15 text-signal-teal',
   },
   {
     icon: ArrowLeftRight,
     title: 'Transaction Tracking',
     desc: 'Record purchases, sales, redeployments, and recycling with a complete audit trail.',
-    color: 'from-green-500 to-emerald-700',
+    tone: 'bg-deep-teal/15 text-deep-teal',
   },
   {
     icon: Warehouse,
     title: 'Warehouse Management',
     desc: 'Multi-warehouse inventory with zones, stock movements, and real-time visibility.',
-    color: 'from-lime-500 to-green-600',
+    tone: 'bg-signal-teal/15 text-signal-teal',
   },
   {
     icon: Leaf,
     title: 'Carbon Accounting',
     desc: 'Scope 1/2/3 GHG emission tracking with category breakdowns and compliance reports.',
-    color: 'from-emerald-500 to-green-700',
+    tone: 'bg-verified-green/15 text-verified-green',
   },
   {
     icon: BarChart3,
     title: 'Dashboard & KPIs',
     desc: 'Live headline metrics for parts, transactions, and emissions at a glance.',
-    color: 'from-green-600 to-emerald-800',
+    tone: 'bg-signal-teal/15 text-signal-teal',
   },
   {
     icon: Shield,
     title: 'Secure by Design',
     desc: 'Google SSO, role-based access control, rate limiting, and full audit logging.',
-    color: 'from-emerald-700 to-green-900',
+    tone: 'bg-deep-teal/15 text-deep-teal',
   },
 ];
 
@@ -65,17 +64,14 @@ export function LandingPage() {
   const cta = isAuthenticated ? '/' : '/login';
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* ── Navbar ── */}
-      <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-gray-100">
+    <div className="min-h-screen bg-[#F9FAFB]">
+      <nav className="sticky top-0 z-40 bg-white/95 backdrop-blur-xl border-b border-gray-200/80">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 bg-gradient-to-br from-green-500 to-emerald-700 rounded-xl flex items-center justify-center shadow-sm shadow-emerald-500/25">
-              <Recycle className="text-white" size={18} />
+            <div className="w-9 h-9 bg-deep-teal rounded-apple-md flex items-center justify-center shadow-sm shadow-deep-teal/20">
+              <Recycle className="text-verified-green" size={18} />
             </div>
-            <span className="text-xl font-bold bg-gradient-to-r from-emerald-900 to-green-600 bg-clip-text text-transparent">
-              Cirtell
-            </span>
+            <span className="font-display text-xl font-semibold text-gray-900">Cirtell</span>
           </div>
           <button onClick={() => navigate(cta)} className="btn-primary">
             {isAuthenticated ? 'Dashboard' : 'Sign In'}
@@ -84,69 +80,91 @@ export function LandingPage() {
         </div>
       </nav>
 
-      {/* ── Hero ── */}
-      <section className="relative overflow-hidden">
-        {/* Background decoration */}
-        <div className="absolute inset-0 -z-10">
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-gradient-to-b from-emerald-50 via-green-50/50 to-transparent rounded-full blur-3xl" />
-          <div className="absolute top-20 right-0 w-72 h-72 bg-gradient-to-bl from-lime-50 to-transparent rounded-full blur-3xl" />
-          <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-green-50/50 to-transparent rounded-full blur-3xl" />
-        </div>
+      <section className="relative overflow-hidden bg-midnight">
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(37,149,123,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(37,149,123,0.08)_1px,transparent_1px)] bg-[size:64px_64px]" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black via-black/90 to-black/30" />
 
-        <div className="max-w-6xl mx-auto px-6 pt-24 pb-20 text-center">
-          <div className="animate-fade-in">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-semibold mb-8 border border-emerald-100">
-              <Recycle size={13} className="animate-spin" style={{ animationDuration: '3s' }} />
+        <div className="relative max-w-6xl mx-auto px-6 pt-20 pb-16 lg:pt-24 lg:pb-20 grid lg:grid-cols-[1fr_440px] gap-12 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-signal-teal/10 text-verified-green rounded-pill text-micro font-semibold mb-8 border border-signal-teal/20">
+              <Recycle size={13} />
               Circular Economy Platform
+            </div>
+
+            <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl font-semibold text-white leading-[1.05] max-w-4xl tracking-tight">
+              Cirtell
+            </h1>
+            <p className="mt-6 text-lg sm:text-xl text-white/55 max-w-2xl leading-relaxed">
+              Track telecom assets from deployment to decommission with Cirveris-style inventory intelligence.
+            </p>
+
+            <div className="mt-10 flex items-center gap-4">
+              <button
+                onClick={() => navigate(cta)}
+                className="group inline-flex items-center gap-2 px-7 py-3.5 bg-white text-midnight rounded-apple-md text-caption font-medium shadow-apple-sm hover:bg-white/90 active:scale-[0.98] transition-all duration-200"
+              >
+                Get Started
+                <ArrowRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
+              </button>
+              <button
+                onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
+                className="inline-flex items-center gap-2 px-6 py-3.5 rounded-apple-md text-caption font-medium text-white/70 border border-white/[0.12] hover:bg-white/[0.06] hover:text-white transition-all"
+              >
+                Learn More
+              </button>
             </div>
           </div>
 
-          <h1 className="animate-slide-up text-5xl sm:text-6xl lg:text-7xl font-extrabold text-gray-900 leading-[1.1] max-w-4xl mx-auto tracking-tight">
-            Track telecom assets from{' '}
-            <span className="bg-gradient-to-r from-emerald-700 via-green-600 to-lime-500 bg-clip-text text-transparent">
-              deployment to decommission
-            </span>
-          </h1>
-
-          <p className="animate-slide-up mt-6 text-lg sm:text-xl text-gray-500 max-w-2xl mx-auto leading-relaxed"
-             style={{ animationDelay: '0.1s', animationFillMode: 'both' }}>
-            One platform to manage your parts catalog, warehouse inventory,
-            transactions, and carbon emissions — designed for circular economy operations.
-          </p>
-
-          <div className="animate-slide-up mt-10 flex items-center justify-center gap-4"
-               style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
-            <button
-              onClick={() => navigate(cta)}
-              className="group inline-flex items-center gap-2 px-7 py-3.5 bg-emerald-800 text-white rounded-2xl text-sm font-semibold
-                         shadow-xl shadow-emerald-800/20 hover:shadow-2xl hover:shadow-emerald-800/30 hover:bg-emerald-900
-                         active:scale-[0.98] transition-all duration-200"
-            >
-              Get Started
-              <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
-            </button>
-            <button
-              onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
-              className="btn-secondary px-6 py-3.5 rounded-2xl"
-            >
-              Learn More
-            </button>
+          <div className="rounded-apple-lg border border-white/[0.08] bg-white/[0.04] p-4 shadow-apple">
+            <div className="rounded-apple-md bg-[#111111] border border-white/[0.08] p-5">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <p className="text-micro uppercase tracking-wider text-white/35 font-semibold">Live snapshot</p>
+                  <p className="text-sub-heading font-semibold text-white mt-1">Inventory Intelligence</p>
+                </div>
+                <div className="w-10 h-10 rounded-apple-xl bg-signal-teal/15 flex items-center justify-center">
+                  <BarChart3 className="text-verified-green" size={20} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  ['Parts', '1,248'],
+                  ['Reuse', '78%'],
+                  ['CO2e', '42.6t'],
+                  ['Value', '$2.4M'],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-apple-md border border-white/[0.08] bg-white/[0.04] p-4">
+                    <p className="text-micro text-white/35 mb-1">{label}</p>
+                    <p className="font-display text-2xl font-semibold text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 space-y-3">
+                {[82, 64, 48].map((width, index) => (
+                  <div key={width} className="h-2 rounded-pill bg-white/[0.06] overflow-hidden">
+                    <div
+                      className={`${index === 0 ? 'bg-verified-green' : index === 1 ? 'bg-signal-teal' : 'bg-deep-teal'} h-full rounded-pill`}
+                      style={{ width: `${width}%` }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ── Stats bar ── */}
-      <section className="border-y border-gray-100 bg-gray-50/50">
+      <section className="border-y border-gray-200/80 bg-white">
         <div className="max-w-6xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-center gap-12 sm:gap-20">
+          <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-16">
             {stats.map(({ label, value, icon: Icon }) => (
               <div key={label} className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-gray-100">
-                  <Icon size={18} className="text-emerald-600" />
+                <div className="w-10 h-10 bg-signal-teal/10 rounded-apple-xl flex items-center justify-center">
+                  <Icon size={18} className="text-signal-teal" />
                 </div>
                 <div>
-                  <p className="text-lg font-bold text-gray-900">{value}</p>
-                  <p className="text-xs text-gray-400 font-medium">{label}</p>
+                  <p className="text-sub-heading font-semibold text-gray-900">{value}</p>
+                  <p className="text-micro text-gray-500 font-medium">{label}</p>
                 </div>
               </div>
             ))}
@@ -154,72 +172,56 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* ── Features ── */}
       <section id="features" className="max-w-6xl mx-auto px-6 py-24">
-        <div className="text-center mb-14">
-          <p className="text-sm font-semibold text-emerald-600 tracking-wide uppercase mb-3">Capabilities</p>
-          <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+        <div className="mb-14">
+          <p className="text-caption font-semibold text-signal-teal tracking-wide uppercase mb-3">Capabilities</p>
+          <h2 className="font-display text-section font-semibold text-gray-900 tracking-tight">
             Everything you need to close the loop
           </h2>
-          <p className="mt-4 text-gray-500 max-w-xl mx-auto">
+          <p className="mt-4 text-body text-gray-500 max-w-xl">
             From asset intake to disposition, Cirtell tracks every part, movement, and emission across your operation.
           </p>
         </div>
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {features.map(({ icon: Icon, title, desc, color }) => (
-            <div
-              key={title}
-              className="group relative bg-white rounded-2xl border border-gray-100 p-6
-                         hover:border-gray-200 hover:shadow-lg hover:shadow-gray-900/5
-                         transition-all duration-300 cursor-default"
-            >
-              <div className={`w-11 h-11 bg-gradient-to-br ${color} rounded-xl flex items-center justify-center mb-4
-                              shadow-sm group-hover:scale-110 transition-transform duration-300`}>
-                <Icon className="text-white" size={20} />
+          {features.map(({ icon: Icon, title, desc, tone }) => (
+            <div key={title} className="group relative bg-white rounded-apple-lg border border-gray-100 p-6 hover:border-gray-200 hover:shadow-apple-sm transition-all duration-300">
+              <div className={`w-12 h-12 ${tone} rounded-apple-xl flex items-center justify-center mb-4 transition-transform duration-300 group-hover:-translate-y-0.5`}>
+                <Icon size={22} />
               </div>
-              <h3 className="text-base font-semibold text-gray-900 mb-2">{title}</h3>
-              <p className="text-sm text-gray-500 leading-relaxed">{desc}</p>
+              <h3 className="text-sub-heading font-semibold text-gray-900 mb-2">{title}</h3>
+              <p className="text-caption text-gray-500 leading-relaxed">{desc}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* ── CTA ── */}
-      <section className="bg-gradient-to-br from-emerald-950 via-green-900 to-emerald-950 py-20">
+      <section className="bg-midnight py-20">
         <div className="max-w-6xl mx-auto px-6 text-center">
-          <div className="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-sm border border-white/10">
-            <Recycle className="text-emerald-400" size={28} />
+          <div className="w-14 h-14 bg-signal-teal/15 rounded-apple-xl flex items-center justify-center mx-auto mb-6 border border-signal-teal/20">
+            <Recycle className="text-verified-green" size={28} />
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4 tracking-tight">
+          <h2 className="font-display text-section font-semibold text-white mb-4 tracking-tight">
             Ready to go circular?
           </h2>
-          <p className="text-gray-400 max-w-md mx-auto mb-8">
+          <p className="text-white/45 max-w-md mx-auto mb-8">
             Start tracking your telecom assets, reduce waste, and measure your environmental impact today.
           </p>
-          <button
-            onClick={() => navigate(cta)}
-            className="group inline-flex items-center gap-2 px-7 py-3.5 bg-emerald-500 text-white rounded-2xl text-sm font-semibold
-                       shadow-lg shadow-emerald-500/25 hover:bg-emerald-400 hover:shadow-xl hover:shadow-emerald-500/30
-                       active:scale-[0.98] transition-all duration-200"
-          >
-            {isAuthenticated ? 'Go to Dashboard' : 'Get Started for Free'}
-            <ArrowRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
+          <button onClick={() => navigate(cta)} className="btn-primary">
+            {isAuthenticated ? 'Go to Dashboard' : 'Get Started'}
+            <ArrowRight size={16} />
           </button>
         </div>
       </section>
 
-      {/* ── Footer ── */}
-      <footer className="border-t border-gray-100 bg-white py-8">
+      <footer className="border-t border-gray-200/80 bg-white py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-gradient-to-br from-green-500 to-emerald-700 rounded-lg flex items-center justify-center">
-              <Recycle className="text-white" size={12} />
+            <div className="w-6 h-6 bg-deep-teal rounded-apple flex items-center justify-center">
+              <Recycle className="text-verified-green" size={12} />
             </div>
-            <span className="text-sm font-semibold text-gray-400">Cirtell</span>
+            <span className="text-caption font-semibold text-gray-500">Cirtell</span>
           </div>
-          <span className="text-xs text-gray-400">
-            &copy; {new Date().getFullYear()} &middot; Built on Cloudflare
-          </span>
+          <span className="text-micro text-gray-400">(c) {new Date().getFullYear()} - Built on Cloudflare</span>
         </div>
       </footer>
     </div>

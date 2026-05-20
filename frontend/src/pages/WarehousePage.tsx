@@ -68,19 +68,23 @@ const emptyMoveForm = {
 };
 
 const conditionBadge: Record<string, string> = {
-  New: 'bg-lime-50 text-lime-800 border-lime-100',
-  Good: 'bg-green-50 text-green-800 border-green-100',
-  Fair: 'bg-emerald-50 text-emerald-800 border-emerald-100',
-  Poor: 'bg-green-100 text-green-900 border-green-200',
-  Scrap: 'bg-emerald-100 text-emerald-900 border-emerald-200',
+  New: 'bg-verified-green/10 text-verified-green border-verified-green/20',
+  Good: 'bg-signal-teal/10 text-signal-teal border-signal-teal/20',
+  Fair: 'bg-deep-teal/10 text-deep-teal border-deep-teal/20',
+  Poor: 'bg-signal-teal/15 text-deep-teal border-signal-teal/25',
+  Scrap: 'bg-deep-teal/15 text-deep-teal border-deep-teal/25',
 };
 
 const moveBadge: Record<string, string> = {
-  Receive: 'bg-lime-50 text-lime-800 border-lime-100',
-  Ship: 'bg-green-50 text-green-800 border-green-100',
-  Transfer: 'bg-emerald-50 text-emerald-800 border-emerald-100',
-  Adjust: 'bg-green-100 text-green-900 border-green-200',
+  Receive: 'bg-verified-green/10 text-verified-green border-verified-green/20',
+  Ship: 'bg-signal-teal/10 text-signal-teal border-signal-teal/20',
+  Transfer: 'bg-deep-teal/10 text-deep-teal border-deep-teal/20',
+  Adjust: 'bg-signal-teal/15 text-deep-teal border-signal-teal/25',
 };
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 export function WarehousePage() {
   const { user } = useAuthStore();
@@ -106,8 +110,8 @@ export function WarehousePage() {
     try {
       const res = await apiRequest<{ success: boolean; warehouses: WarehouseItem[] }>('/api/warehouses');
       setWarehouses(res.warehouses);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load warehouses'));
     } finally {
       setLoading(false);
     }
@@ -118,8 +122,8 @@ export function WarehousePage() {
     try {
       const res = await apiRequest<{ success: boolean; inventory: InventoryItem[] }>('/api/warehouses/inventory/all');
       setInventory(res.inventory);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load inventory'));
     } finally {
       setLoading(false);
     }
@@ -130,8 +134,8 @@ export function WarehousePage() {
     try {
       const res = await apiRequest<{ success: boolean; movements: Movement[] }>('/api/warehouses/movements/list');
       setMovements(res.movements);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load movements'));
     } finally {
       setLoading(false);
     }
@@ -160,8 +164,8 @@ export function WarehousePage() {
       setWhForm(emptyWarehouseForm);
       setEditWhId(null);
       fetchWarehouses();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save warehouse'));
     } finally {
       setSaving(false);
     }
@@ -184,8 +188,8 @@ export function WarehousePage() {
       setMoveForm(emptyMoveForm);
       if (tab === 'inventory') fetchInventory();
       else { setTab('movements'); fetchMovements(); }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to move inventory'));
     } finally {
       setSaving(false);
     }
@@ -240,7 +244,7 @@ export function WarehousePage() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 p-3 mb-5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm animate-fade-in">
+        <div className="flex items-start gap-2 p-3 mb-5 bg-signal-teal/10 border border-signal-teal/20 text-deep-teal rounded-apple-md text-sm animate-fade-in">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
@@ -255,7 +259,7 @@ export function WarehousePage() {
               onClick={() => setTab(t.key)}
               className={`px-4 pb-3 text-sm font-medium border-b-2 transition-colors ${
                 tab === t.key
-                  ? 'border-emerald-600 text-emerald-700'
+                  ? 'border-verified-green text-gray-900'
                   : 'border-transparent text-gray-400 hover:text-gray-600'
               }`}
             >
@@ -308,13 +312,13 @@ export function WarehousePage() {
                   >
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-500 to-emerald-700 flex items-center justify-center shadow-sm">
+                        <div className="w-9 h-9 rounded-apple-md bg-deep-teal flex items-center justify-center shadow-sm">
                           <WarehouseIcon size={16} className="text-white" />
                         </div>
-                        <h3 className="font-semibold text-gray-900 group-hover:text-emerald-700 transition-colors">{w.name}</h3>
+                        <h3 className="font-semibold text-gray-900 group-hover:text-signal-teal transition-colors">{w.name}</h3>
                       </div>
                       <span className={`badge border ${
-                        w.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-green-50 text-green-700 border-green-100'
+                        w.status === 'active' ? 'bg-signal-teal/10 text-signal-teal border-signal-teal/20' : 'bg-deep-teal/10 text-deep-teal border-deep-teal/20'
                       }`}>{w.status}</span>
                     </div>
                     <p className="text-xs text-gray-300 font-mono mb-2">{w.code}</p>
@@ -375,7 +379,7 @@ export function WarehousePage() {
                             <p className="text-xs text-gray-300">{item.model_name}</p>
                           </td>
                           <td className="px-4 py-3.5 text-gray-600">{item.warehouse_name}</td>
-                          <td className="px-4 py-3.5 text-gray-400">{item.zone_name || '—'}</td>
+                          <td className="px-4 py-3.5 text-gray-400">{item.zone_name || '-'}</td>
                           <td className="px-4 py-3.5 text-right font-semibold text-gray-900 tabular-nums">{item.quantity.toLocaleString()}</td>
                           <td className="px-4 py-3.5">
                             <span className={`badge border ${conditionBadge[item.condition] || conditionBadge.Poor}`}>{item.condition}</span>
@@ -422,9 +426,9 @@ export function WarehousePage() {
                           </td>
                           <td className="px-4 py-3.5 font-medium text-gray-900">{m.part_number}</td>
                           <td className="px-4 py-3.5 text-right font-semibold tabular-nums">{m.quantity}</td>
-                          <td className="px-4 py-3.5 text-gray-400">{m.from_warehouse_name || '—'}</td>
-                          <td className="px-4 py-3.5 text-gray-400">{m.to_warehouse_name || '—'}</td>
-                          <td className="px-4 py-3.5 text-gray-300 text-xs">{m.created_by_name || '—'}</td>
+                          <td className="px-4 py-3.5 text-gray-400">{m.from_warehouse_name || '-'}</td>
+                          <td className="px-4 py-3.5 text-gray-400">{m.to_warehouse_name || '-'}</td>
+                          <td className="px-4 py-3.5 text-gray-300 text-xs">{m.created_by_name || '-'}</td>
                         </tr>
                       ))
                     )}
@@ -447,11 +451,11 @@ export function WarehousePage() {
             <div className="px-6 py-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Name <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Name <span className="text-signal-teal">*</span></label>
                   <input value={whForm.name} onChange={(e) => setWhForm({ ...whForm, name: e.target.value })} className="input-base" placeholder="Main Warehouse" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Code <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Code <span className="text-signal-teal">*</span></label>
                   <input value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} className="input-base uppercase" placeholder="WH-01" />
                 </div>
               </div>
@@ -490,7 +494,7 @@ export function WarehousePage() {
             <div className="flex justify-end gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
               <button onClick={() => setShowWhForm(false)} className="btn-secondary">Cancel</button>
               <button onClick={saveWarehouse} disabled={saving || !whForm.name || !whForm.code} className="btn-primary">
-                {saving ? 'Saving…' : editWhId ? 'Update' : 'Create'}
+                {saving ? 'Saving...' : editWhId ? 'Update' : 'Create'}
               </button>
             </div>
           </div>
@@ -516,27 +520,27 @@ export function WarehousePage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Part ID <span className="text-emerald-500">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Part ID <span className="text-signal-teal">*</span></label>
                 <input value={moveForm.part_id} onChange={(e) => setMoveForm({ ...moveForm, part_id: e.target.value })} className="input-base" placeholder="Enter part ID" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-emerald-500">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-signal-teal">*</span></label>
                 <input type="number" value={moveForm.quantity} onChange={(e) => setMoveForm({ ...moveForm, quantity: e.target.value })} className="input-base" />
               </div>
               {(moveForm.movement_type === 'Ship' || moveForm.movement_type === 'Transfer') && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Warehouse <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Warehouse <span className="text-signal-teal">*</span></label>
                   <select value={moveForm.from_warehouse_id} onChange={(e) => setMoveForm({ ...moveForm, from_warehouse_id: e.target.value })} className="input-base">
-                    <option value="">Select source…</option>
+                    <option value="">Select source...</option>
                     {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.code})</option>)}
                   </select>
                 </div>
               )}
               {(moveForm.movement_type === 'Receive' || moveForm.movement_type === 'Transfer') && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Destination Warehouse <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Destination Warehouse <span className="text-signal-teal">*</span></label>
                   <select value={moveForm.to_warehouse_id} onChange={(e) => setMoveForm({ ...moveForm, to_warehouse_id: e.target.value })} className="input-base">
-                    <option value="">Select destination…</option>
+                    <option value="">Select destination...</option>
                     {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.code})</option>)}
                   </select>
                 </div>
@@ -563,7 +567,7 @@ export function WarehousePage() {
             <div className="flex justify-end gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
               <button onClick={() => setShowMoveForm(false)} className="btn-secondary">Cancel</button>
               <button onClick={submitMove} disabled={saving || !moveForm.part_id || !moveForm.quantity} className="btn-primary">
-                {saving ? 'Processing…' : 'Submit'}
+                {saving ? 'Processing...' : 'Submit'}
               </button>
             </div>
           </div>

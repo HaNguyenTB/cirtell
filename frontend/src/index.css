@@ -15,6 +15,8 @@
   --text-sub-heading--line-height: 1.19;
   --text-tile: 1.75rem;
   --text-tile--line-height: 1.14;
+  --text-section: 2.5rem;
+  --text-section--line-height: 1.10;
 
   --color-brand-50: #ecfdf5;
   --color-brand-100: #d1fae5;
@@ -32,6 +34,10 @@
   --color-verified-green: #3bcf9b;
   --color-slate: #6b7c85;
   --color-cloud-white: #f4f7f8;
+  --color-surface-card: #111827;
+  --color-surface-card-alt: #1f2937;
+  --color-surface-hover: #263244;
+  --color-surface-nav: #0f172a;
 
   --radius-apple-sm: 5px;
   --radius-apple: 8px;
@@ -51,77 +57,76 @@
     -moz-osx-font-smoothing: grayscale;
   }
   body {
-    @apply text-gray-900 bg-gray-50;
+    @apply text-gray-900 bg-[#F9FAFB] font-sans;
     font-feature-settings: "cv11", "ss01";
   }
   ::selection {
-    @apply bg-emerald-200 text-emerald-900;
+    @apply bg-signal-teal/20 text-deep-teal;
   }
   /* Better focus rings */
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-emerald-500;
+    @apply outline-2 outline-offset-2 outline-signal-teal;
   }
 }
 
 /* ── Shared component patterns ── */
 @layer components {
   .glass-card {
-    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-lg shadow-gray-900/5;
+    @apply bg-white/95 backdrop-blur-xl border border-gray-100 shadow-none;
   }
   .input-base {
-    @apply w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-xl text-sm
+    @apply w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-apple-md text-caption
            placeholder:text-gray-400 transition-all duration-200
            hover:border-gray-300
-           focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500;
+           focus:outline-none focus:ring-2 focus:ring-signal-teal/30 focus:border-signal-teal;
   }
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 
-           bg-emerald-600 text-white rounded-xl text-sm font-semibold
-           shadow-sm shadow-emerald-600/20
-           hover:bg-emerald-700 hover:shadow-md hover:shadow-emerald-600/25
+           bg-signal-teal text-white rounded-apple-md text-caption font-medium
+           shadow-none
+           hover:bg-deep-teal hover:shadow-apple-sm
            active:scale-[0.98] transition-all duration-200
            disabled:opacity-50 disabled:pointer-events-none;
   }
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2.5
-           bg-white text-gray-700 rounded-xl text-sm font-medium
+           bg-white text-gray-700 rounded-apple-md text-caption font-medium
            border border-gray-200 shadow-sm
            hover:bg-gray-50 hover:border-gray-300
            active:scale-[0.98] transition-all duration-200;
   }
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-3 py-2
-           text-gray-500 rounded-xl text-sm font-medium
-           hover:bg-gray-100 hover:text-gray-700
+           text-gray-500 rounded-apple-md text-caption font-medium
+           hover:bg-black/[0.04] hover:text-gray-800
            active:scale-[0.98] transition-all duration-150;
   }
   .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide;
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-pill text-micro font-semibold tracking-wide;
   }
   .page-title {
-    @apply text-2xl font-bold text-gray-900 tracking-tight;
+    @apply font-display text-tile font-semibold text-gray-900 tracking-tight;
   }
   .page-subtitle {
-    @apply text-sm text-gray-500 mt-1;
+    @apply text-body text-gray-500 mt-1;
   }
   .stat-card {
-    @apply bg-white rounded-2xl border border-gray-100 p-5 
-           hover:shadow-md hover:shadow-gray-900/5 hover:border-gray-200
+    @apply bg-white rounded-apple-lg border border-gray-100 p-6 shadow-none
+           hover:shadow-apple-sm hover:border-gray-200
            transition-all duration-300;
   }
   .table-container {
-    @apply bg-white rounded-2xl border border-gray-100 overflow-hidden
-           shadow-sm shadow-gray-900/5;
+    @apply bg-[#F9FAFB] rounded-apple-lg border border-black/[0.06] overflow-hidden shadow-none;
   }
   .table-head {
-    @apply bg-gray-50/80 text-[11px] font-semibold text-gray-500 uppercase tracking-wider;
+    @apply bg-gray-50 text-micro font-semibold text-gray-500 uppercase tracking-wider;
   }
   .modal-overlay {
     @apply fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm;
     animation: fade-in 0.2s ease-out;
   }
   .modal-panel {
-    @apply bg-white rounded-2xl shadow-2xl shadow-gray-900/20 w-full max-w-lg mx-4 
+    @apply bg-white rounded-apple-lg shadow-apple w-full max-w-lg mx-4
            max-h-[85vh] overflow-hidden flex flex-col;
     animation: zoom-in-95 0.2s ease-out;
   }

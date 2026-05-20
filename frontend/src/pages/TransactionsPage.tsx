@@ -34,11 +34,24 @@ const emptyForm = {
   po_number: '',
 };
 
+type TransactionTextField = 'vendor' | 'serial_number' | 'condition' | 'po_number';
+
+const optionalTextFields: { key: TransactionTextField; label: string }[] = [
+  { key: 'vendor', label: 'Vendor' },
+  { key: 'serial_number', label: 'Serial Number' },
+  { key: 'condition', label: 'Condition' },
+  { key: 'po_number', label: 'PO Number' },
+];
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 const movementColor: Record<string, string> = {
-  Purchase: 'bg-lime-50 text-lime-800 border-lime-100',
-  Sale: 'bg-green-50 text-green-800 border-green-100',
-  Redeploy: 'bg-emerald-50 text-emerald-800 border-emerald-100',
-  Recycle: 'bg-green-100 text-green-900 border-green-200',
+  Purchase: 'bg-signal-teal/10 text-signal-teal border-signal-teal/20',
+  Sale: 'bg-verified-green/10 text-verified-green border-verified-green/20',
+  Redeploy: 'bg-deep-teal/10 text-deep-teal border-deep-teal/20',
+  Recycle: 'bg-signal-teal/15 text-deep-teal border-signal-teal/20',
 };
 
 export function TransactionsPage() {
@@ -75,8 +88,8 @@ export function TransactionsPage() {
       );
       setTransactions(res.transactions);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load transactions'));
     } finally {
       setLoading(false);
     }
@@ -121,8 +134,8 @@ export function TransactionsPage() {
       });
       setShowForm(false);
       fetchTransactions();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save transaction'));
     } finally {
       setSaving(false);
     }
@@ -201,12 +214,12 @@ export function TransactionsPage() {
                   <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-4 py-3.5 font-medium text-gray-900 tabular-nums">{tx.date}</td>
                     <td className="px-4 py-3.5">
-                      <span className={`badge border ${movementColor[tx.movementType] || 'bg-green-100 text-green-900 border-green-200'}`}>
+                      <span className={`badge border ${movementColor[tx.movementType] || 'bg-deep-teal/10 text-deep-teal border-deep-teal/20'}`}>
                         {tx.movementType}
                       </span>
                     </td>
-                    <td className="px-4 py-3.5 text-gray-500">{tx.partNumber || '—'}</td>
-                    <td className="px-4 py-3.5 text-gray-500">{tx.vendor || '—'}</td>
+                    <td className="px-4 py-3.5 text-gray-500">{tx.partNumber || '-'}</td>
+                    <td className="px-4 py-3.5 text-gray-500">{tx.vendor || '-'}</td>
                     <td className="px-4 py-3.5 text-right text-gray-900 tabular-nums">{tx.quantity.toLocaleString()}</td>
                     <td className="px-4 py-3.5 text-right text-gray-500 tabular-nums">${tx.unitPrice.toFixed(2)}</td>
                     <td className="px-4 py-3.5 text-right font-semibold text-gray-900 tabular-nums">
@@ -222,7 +235,7 @@ export function TransactionsPage() {
         {total > limit && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
             <span className="text-xs text-gray-400 font-medium">
-              {offset + 1}–{Math.min(offset + limit, total)} of {total}
+              {offset + 1}-{Math.min(offset + limit, total)} of {total}
             </span>
             <div className="flex gap-1.5">
               <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))} className="btn-ghost px-2.5 py-1.5 text-xs disabled:opacity-30">
@@ -246,18 +259,18 @@ export function TransactionsPage() {
             </div>
             <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
+                <div className="flex items-start gap-2 p-3 bg-signal-teal/10 border border-signal-teal/20 text-deep-teal rounded-apple-md text-sm">
                   <AlertCircle size={16} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Date <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Date <span className="text-signal-teal">*</span></label>
                   <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Movement Type <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Movement Type <span className="text-signal-teal">*</span></label>
                   <select value={form.movement_type} onChange={(e) => setForm({ ...form, movement_type: e.target.value })} className="input-base">
                     {MOVEMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
@@ -265,7 +278,7 @@ export function TransactionsPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-signal-teal">*</span></label>
                   <input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="input-base" />
                 </div>
                 <div>
@@ -276,26 +289,21 @@ export function TransactionsPage() {
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Part</label>
                 <select value={form.part_id} onChange={(e) => setForm({ ...form, part_id: e.target.value })} className="input-base">
-                  <option value="">— None —</option>
+                  <option value="">- None -</option>
                   {partsList.map((p) => <option key={p.id} value={p.id}>{p.part_number}</option>)}
                 </select>
               </div>
-              {[
-                { key: 'vendor', label: 'Vendor' },
-                { key: 'serial_number', label: 'Serial Number' },
-                { key: 'condition', label: 'Condition' },
-                { key: 'po_number', label: 'PO Number' },
-              ].map(({ key, label }) => (
+              {optionalTextFields.map(({ key, label }) => (
                 <div key={key}>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{label}</label>
-                  <input type="text" value={(form as any)[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} className="input-base" />
+                  <input type="text" value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} className="input-base" />
                 </div>
               ))}
             </div>
             <div className="flex justify-end gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
               <button onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
               <button onClick={handleSave} disabled={saving} className="btn-primary">
-                {saving ? 'Saving…' : 'Create'}
+                {saving ? 'Saving...' : 'Create'}
               </button>
             </div>
           </div>

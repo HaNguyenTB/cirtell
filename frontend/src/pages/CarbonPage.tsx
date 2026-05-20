@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
 import { Plus, Trash2, X, Leaf, AlertCircle } from 'lucide-react';
@@ -26,6 +26,17 @@ interface Scope3Cat {
   stream: string;
 }
 
+interface GhgReport {
+  total_kg: number;
+  scope1_kg: number;
+  scope2_kg: number;
+  scope3_kg: number;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 const emptyForm = {
   scope: '3',
   category_id: '',
@@ -42,9 +53,9 @@ const emptyForm = {
 };
 
 const scopeStyles: Record<number, { badge: string; gradient: string; border: string }> = {
-  1: { badge: 'bg-lime-50 text-lime-800 border-lime-100', gradient: 'from-lime-400 to-green-500', border: 'border-lime-400' },
-  2: { badge: 'bg-green-50 text-green-800 border-green-100', gradient: 'from-green-500 to-emerald-600', border: 'border-green-500' },
-  3: { badge: 'bg-emerald-50 text-emerald-800 border-emerald-100', gradient: 'from-emerald-600 to-green-800', border: 'border-emerald-600' },
+  1: { badge: 'bg-verified-green/10 text-verified-green border-verified-green/20', gradient: 'from-verified-green to-signal-teal', border: 'border-verified-green' },
+  2: { badge: 'bg-signal-teal/10 text-signal-teal border-signal-teal/20', gradient: 'from-signal-teal to-deep-teal', border: 'border-signal-teal' },
+  3: { badge: 'bg-deep-teal/10 text-deep-teal border-deep-teal/20', gradient: 'from-deep-teal to-signal-teal', border: 'border-deep-teal' },
 };
 
 export function CarbonPage() {
@@ -61,15 +72,9 @@ export function CarbonPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
-  const [report, setReport] = useState<any>(null);
+  const [report, setReport] = useState<GhgReport | null>(null);
 
-  useEffect(() => {
-    fetchEntries();
-    fetchCategories();
-    fetchReport();
-  }, [scopeFilter]);
-
-  async function fetchEntries() {
+  const fetchEntries = useCallback(async () => {
     setLoading(true);
     try {
       const res = await apiRequest<{ success: boolean; data: GhgEntry[] }>(
@@ -77,26 +82,32 @@ export function CarbonPage() {
         { params: { scope: scopeFilter || undefined } },
       );
       setEntries(res.data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load emission entries'));
     } finally {
       setLoading(false);
     }
-  }
+  }, [scopeFilter]);
 
-  async function fetchCategories() {
+  const fetchCategories = useCallback(async () => {
     try {
       const res = await apiRequest<{ success: boolean; data: Scope3Cat[] }>('/api/ghg/categories');
       setCategories(res.data);
     } catch { /* ignore */ }
-  }
+  }, []);
 
-  async function fetchReport() {
+  const fetchReport = useCallback(async () => {
     try {
-      const res = await apiRequest<{ success: boolean; totals: any }>('/api/ghg/report');
+      const res = await apiRequest<{ success: boolean; totals: GhgReport }>('/api/ghg/report');
       setReport(res.totals);
     } catch { /* ignore */ }
-  }
+  }, []);
+
+  useEffect(() => {
+    fetchEntries();
+    fetchCategories();
+    fetchReport();
+  }, [fetchEntries, fetchCategories, fetchReport]);
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this emission entry?')) return;
@@ -104,8 +115,8 @@ export function CarbonPage() {
       await apiRequest(`/api/ghg/entries/${id}`, { method: 'DELETE' });
       fetchEntries();
       fetchReport();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to delete emission entry'));
     }
   }
 
@@ -139,8 +150,8 @@ export function CarbonPage() {
       setForm(emptyForm);
       fetchEntries();
       fetchReport();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save emission entry'));
     } finally {
       setSaving(false);
     }
@@ -149,10 +160,10 @@ export function CarbonPage() {
   const scopeLabel = (s: number) => s === 1 ? 'Scope 1' : s === 2 ? 'Scope 2' : 'Scope 3';
 
   const summaryCards = report ? [
-    { label: 'Total Emissions', value: report.total_kg, gradient: 'from-emerald-800 to-green-600', isMain: true },
-    { label: 'Scope 1 — Direct', value: report.scope1_kg, ...scopeStyles[1] },
-    { label: 'Scope 2 — Energy', value: report.scope2_kg, ...scopeStyles[2] },
-    { label: 'Scope 3 — Value Chain', value: report.scope3_kg, ...scopeStyles[3] },
+    { label: 'Total Emissions', value: report.total_kg, gradient: 'from-deep-teal to-signal-teal', isMain: true },
+    { label: 'Scope 1 - Direct', value: report.scope1_kg, ...scopeStyles[1] },
+    { label: 'Scope 2 - Energy', value: report.scope2_kg, ...scopeStyles[2] },
+    { label: 'Scope 3 - Value Chain', value: report.scope3_kg, ...scopeStyles[3] },
   ] : [];
 
   return (
@@ -188,7 +199,7 @@ export function CarbonPage() {
               </div>
               <p className="text-2xl font-bold text-gray-900 tabular-nums">
                 {(c.value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                <span className="text-xs font-normal text-gray-400 ml-1.5">kg CO₂e</span>
+                <span className="text-xs font-normal text-gray-400 ml-1.5">kg CO2e</span>
               </p>
             </div>
           ))}
@@ -219,7 +230,7 @@ export function CarbonPage() {
                 <th className="text-left px-4 py-3">Source</th>
                 <th className="text-right px-4 py-3">Activity</th>
                 <th className="text-right px-4 py-3">EF</th>
-                <th className="text-right px-4 py-3">CO₂e (kg)</th>
+                <th className="text-right px-4 py-3">CO2e (kg)</th>
                 <th className="text-left px-4 py-3">Period</th>
                 <th className="text-left px-4 py-3">Quality</th>
                 {canEdit && <th className="w-12 px-4 py-3" />}
@@ -253,13 +264,13 @@ export function CarbonPage() {
                     <td className="px-4 py-3.5 text-right text-gray-500 tabular-nums">{e.activity_data} {e.activity_unit}</td>
                     <td className="px-4 py-3.5 text-right text-gray-500 tabular-nums">{e.emission_factor}</td>
                     <td className="px-4 py-3.5 text-right font-semibold text-gray-900 tabular-nums">{e.co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
-                    <td className="px-4 py-3.5 text-gray-400 text-xs tabular-nums">{e.reporting_period_start} → {e.reporting_period_end}</td>
+                    <td className="px-4 py-3.5 text-gray-400 text-xs tabular-nums">{e.reporting_period_start} - {e.reporting_period_end}</td>
                     <td className="px-4 py-3.5">
-                      <span className="badge bg-emerald-50 text-emerald-800 capitalize">{e.data_quality}</span>
+                      <span className="badge bg-signal-teal/10 text-deep-teal capitalize">{e.data_quality}</span>
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3.5 text-right">
-                        <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-emerald-700">
+                        <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-signal-teal">
                           <Trash2 size={14} />
                         </button>
                       </td>
@@ -282,7 +293,7 @@ export function CarbonPage() {
             </div>
             <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
+                <div className="flex items-start gap-2 p-3 bg-signal-teal/10 border border-signal-teal/20 text-deep-teal rounded-apple-md text-sm">
                   <AlertCircle size={16} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -290,16 +301,16 @@ export function CarbonPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Scope <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Scope <span className="text-signal-teal">*</span></label>
                   <select value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, category_id: '' })} className="input-base">
-                    <option value="1">Scope 1 — Direct</option>
-                    <option value="2">Scope 2 — Energy</option>
-                    <option value="3">Scope 3 — Value Chain</option>
+                    <option value="1">Scope 1 - Direct</option>
+                    <option value="2">Scope 2 - Energy</option>
+                    <option value="3">Scope 3 - Value Chain</option>
                   </select>
                 </div>
                 {form.scope === '3' && (
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category <span className="text-emerald-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category <span className="text-signal-teal">*</span></label>
                     <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} className="input-base">
                       <option value="">Select...</option>
                       {categories.map((c) => <option key={c.id} value={c.id}>{c.id}. {c.name}</option>)}
@@ -309,26 +320,26 @@ export function CarbonPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Description <span className="text-emerald-500">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Description <span className="text-signal-teal">*</span></label>
                 <input type="text" value={form.source_description} onChange={(e) => setForm({ ...form, source_description: e.target.value })}
                   className="input-base" placeholder="e.g. Natural gas combustion - Boiler #1" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Activity Data <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Activity Data <span className="text-signal-teal">*</span></label>
                   <input type="number" step="0.01" value={form.activity_data} onChange={(e) => setForm({ ...form, activity_data: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Unit <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Unit <span className="text-signal-teal">*</span></label>
                   <input type="text" value={form.activity_unit} onChange={(e) => setForm({ ...form, activity_unit: e.target.value })}
-                    className="input-base" placeholder="e.g. m³, kWh, km, kg" />
+                    className="input-base" placeholder="e.g. mÂ3, kWh, km, kg" />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Emission Factor <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Emission Factor <span className="text-signal-teal">*</span></label>
                   <input type="number" step="0.0001" value={form.emission_factor} onChange={(e) => setForm({ ...form, emission_factor: e.target.value })} className="input-base" />
                 </div>
                 <div>
@@ -339,11 +350,11 @@ export function CarbonPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period Start <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period Start <span className="text-signal-teal">*</span></label>
                   <input type="date" value={form.reporting_period_start} onChange={(e) => setForm({ ...form, reporting_period_start: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period End <span className="text-emerald-500">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period End <span className="text-signal-teal">*</span></label>
                   <input type="date" value={form.reporting_period_end} onChange={(e) => setForm({ ...form, reporting_period_end: e.target.value })} className="input-base" />
                 </div>
               </div>
@@ -365,7 +376,7 @@ export function CarbonPage() {
             <div className="flex justify-end gap-2.5 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
               <button onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
               <button onClick={handleSave} disabled={saving} className="btn-primary">
-                {saving ? 'Saving…' : 'Create'}
+                {saving ? 'Saving...' : 'Create'}
               </button>
             </div>
           </div>
