@@ -51,7 +51,7 @@ interface UseGoogleSSOOptions {
 
 export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
   const shouldInitialize = options.initialize ?? true;
-  const shouldPromptOneTap = options.oneTap ?? true;
+  const shouldPromptOneTap = options.oneTap ?? false;
   const { setUser, logout: storeLogout } = useAuthStore();
   const initializedRef = useRef(false);
   const buttonContainerRef = useRef<HTMLDivElement | null>(null);
