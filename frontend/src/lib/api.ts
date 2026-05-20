@@ -6,10 +6,16 @@ interface RequestOptions {
   method?: string;
   body?: unknown;
   params?: Record<string, string | number | undefined>;
+  redirectOnUnauthorized?: boolean;
+}
+
+interface ErrorResponse {
+  message?: string;
+  error?: string;
 }
 
 export async function apiRequest<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, params } = opts;
+  const { method = 'GET', body, params, redirectOnUnauthorized = true } = opts;
   const token = getToken();
 
   let url = `${API_URL}${path}`;
@@ -40,13 +46,15 @@ export async function apiRequest<T = unknown>(path: string, opts: RequestOptions
 
   if (res.status === 401) {
     clearToken();
-    window.location.href = '/login';
+    if (redirectOnUnauthorized) {
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as any).message || (err as any).error || `Request failed: ${res.status}`);
+    const err = await res.json().catch((): ErrorResponse => ({ error: res.statusText })) as ErrorResponse;
+    throw new Error(err.message || err.error || `Request failed: ${res.status}`);
   }
 
   return res.json() as Promise<T>;

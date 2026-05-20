@@ -65,7 +65,7 @@ export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
         setToken(response.credential);
         const result = await apiRequest<{ success: boolean; user: AuthUser; message?: string; error?: string }>(
           '/api/auth/validate',
-          { method: 'POST' },
+          { method: 'POST', redirectOnUnauthorized: false },
         );
         if (result.success && result.user) {
           setUser(result.user);
