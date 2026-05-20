@@ -51,7 +51,7 @@ export function DashboardPage() {
 
   if (error) {
     return (
-      <div className="animate-slide-up bg-red-50 border border-red-100 text-red-700 p-5 rounded-2xl text-sm">
+      <div className="animate-slide-up bg-emerald-50 border border-emerald-200 text-emerald-800 p-5 rounded-2xl text-sm">
         {error}
       </div>
     );
@@ -63,45 +63,45 @@ export function DashboardPage() {
           label: 'Total Transactions',
           value: data.total_transactions.toLocaleString(),
           icon: ArrowLeftRight,
-          gradient: 'from-blue-500 to-indigo-500',
-          bg: 'bg-blue-50',
+          gradient: 'from-emerald-400 to-emerald-600',
+          bg: 'bg-emerald-50',
         },
         {
           label: 'Total Value',
           value: `$${data.total_value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
           icon: DollarSign,
-          gradient: 'from-emerald-500 to-green-500',
+          gradient: 'from-green-500 to-emerald-700',
           bg: 'bg-emerald-50',
         },
         {
           label: 'Reuse Rate',
           value: `${data.reuse_rate}%`,
           icon: Recycle,
-          gradient: 'from-amber-500 to-orange-500',
-          bg: 'bg-amber-50',
+          gradient: 'from-lime-500 to-green-600',
+          bg: 'bg-lime-50',
         },
         {
           label: 'Total CO₂e (kg)',
           value: data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 }),
           icon: Leaf,
-          gradient: 'from-teal-500 to-cyan-500',
-          bg: 'bg-teal-50',
+          gradient: 'from-emerald-500 to-green-700',
+          bg: 'bg-emerald-50',
         },
         {
           label: 'Parts in Catalog',
           value: data.total_parts.toLocaleString(),
           icon: Package,
-          gradient: 'from-violet-500 to-purple-500',
-          bg: 'bg-violet-50',
+          gradient: 'from-green-600 to-emerald-800',
+          bg: 'bg-green-50',
         },
       ]
     : [];
 
   const scopes = data
     ? [
-        { label: 'Scope 1', sub: 'Direct Emissions', value: data.scope1_kg, color: 'from-red-500 to-rose-400', barColor: 'bg-red-500' },
-        { label: 'Scope 2', sub: 'Energy Indirect', value: data.scope2_kg, color: 'from-amber-500 to-yellow-400', barColor: 'bg-amber-500' },
-        { label: 'Scope 3', sub: 'Value Chain', value: data.scope3_kg, color: 'from-blue-500 to-sky-400', barColor: 'bg-blue-500' },
+        { label: 'Scope 1', sub: 'Direct Emissions', value: data.scope1_kg, color: 'from-lime-400 to-green-500', barColor: 'bg-lime-500' },
+        { label: 'Scope 2', sub: 'Energy Indirect', value: data.scope2_kg, color: 'from-green-500 to-emerald-600', barColor: 'bg-green-600' },
+        { label: 'Scope 3', sub: 'Value Chain', value: data.scope3_kg, color: 'from-emerald-600 to-green-800', barColor: 'bg-emerald-700' },
       ]
     : [];
 

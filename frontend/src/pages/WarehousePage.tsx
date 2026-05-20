@@ -68,18 +68,18 @@ const emptyMoveForm = {
 };
 
 const conditionBadge: Record<string, string> = {
-  New: 'bg-blue-50 text-blue-700 border-blue-100',
-  Good: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-  Fair: 'bg-amber-50 text-amber-700 border-amber-100',
-  Poor: 'bg-red-50 text-red-700 border-red-100',
-  Scrap: 'bg-gray-100 text-gray-500 border-gray-200',
+  New: 'bg-lime-50 text-lime-800 border-lime-100',
+  Good: 'bg-green-50 text-green-800 border-green-100',
+  Fair: 'bg-emerald-50 text-emerald-800 border-emerald-100',
+  Poor: 'bg-green-100 text-green-900 border-green-200',
+  Scrap: 'bg-emerald-100 text-emerald-900 border-emerald-200',
 };
 
 const moveBadge: Record<string, string> = {
-  Receive: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-  Ship: 'bg-orange-50 text-orange-700 border-orange-100',
-  Transfer: 'bg-blue-50 text-blue-700 border-blue-100',
-  Adjust: 'bg-gray-100 text-gray-600 border-gray-200',
+  Receive: 'bg-lime-50 text-lime-800 border-lime-100',
+  Ship: 'bg-green-50 text-green-800 border-green-100',
+  Transfer: 'bg-emerald-50 text-emerald-800 border-emerald-100',
+  Adjust: 'bg-green-100 text-green-900 border-green-200',
 };
 
 export function WarehousePage() {
@@ -240,7 +240,7 @@ export function WarehousePage() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 p-3 mb-5 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm animate-fade-in">
+        <div className="flex items-start gap-2 p-3 mb-5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm animate-fade-in">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
@@ -308,13 +308,13 @@ export function WarehousePage() {
                   >
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-400 flex items-center justify-center shadow-sm">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-500 to-emerald-700 flex items-center justify-center shadow-sm">
                           <WarehouseIcon size={16} className="text-white" />
                         </div>
                         <h3 className="font-semibold text-gray-900 group-hover:text-emerald-700 transition-colors">{w.name}</h3>
                       </div>
                       <span className={`badge border ${
-                        w.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-gray-100 text-gray-500 border-gray-200'
+                        w.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-green-50 text-green-700 border-green-100'
                       }`}>{w.status}</span>
                     </div>
                     <p className="text-xs text-gray-300 font-mono mb-2">{w.code}</p>
@@ -447,11 +447,11 @@ export function WarehousePage() {
             <div className="px-6 py-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Name <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Name <span className="text-emerald-500">*</span></label>
                   <input value={whForm.name} onChange={(e) => setWhForm({ ...whForm, name: e.target.value })} className="input-base" placeholder="Main Warehouse" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Code <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Code <span className="text-emerald-500">*</span></label>
                   <input value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} className="input-base uppercase" placeholder="WH-01" />
                 </div>
               </div>
@@ -516,16 +516,16 @@ export function WarehousePage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Part ID <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Part ID <span className="text-emerald-500">*</span></label>
                 <input value={moveForm.part_id} onChange={(e) => setMoveForm({ ...moveForm, part_id: e.target.value })} className="input-base" placeholder="Enter part ID" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-emerald-500">*</span></label>
                 <input type="number" value={moveForm.quantity} onChange={(e) => setMoveForm({ ...moveForm, quantity: e.target.value })} className="input-base" />
               </div>
               {(moveForm.movement_type === 'Ship' || moveForm.movement_type === 'Transfer') && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Warehouse <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Warehouse <span className="text-emerald-500">*</span></label>
                   <select value={moveForm.from_warehouse_id} onChange={(e) => setMoveForm({ ...moveForm, from_warehouse_id: e.target.value })} className="input-base">
                     <option value="">Select source…</option>
                     {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.code})</option>)}
@@ -534,7 +534,7 @@ export function WarehousePage() {
               )}
               {(moveForm.movement_type === 'Receive' || moveForm.movement_type === 'Transfer') && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Destination Warehouse <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Destination Warehouse <span className="text-emerald-500">*</span></label>
                   <select value={moveForm.to_warehouse_id} onChange={(e) => setMoveForm({ ...moveForm, to_warehouse_id: e.target.value })} className="input-base">
                     <option value="">Select destination…</option>
                     {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.code})</option>)}

@@ -190,7 +190,7 @@ export function PartsPage() {
                     <td className="px-4 py-3.5 text-gray-500">{p.vendor || '—'}</td>
                     <td className="px-4 py-3.5">
                       {p.category ? (
-                        <span className="badge bg-gray-100 text-gray-600">{p.category}</span>
+                        <span className="badge bg-emerald-50 text-emerald-800">{p.category}</span>
                       ) : '—'}
                     </td>
                     <td className="px-4 py-3.5 text-gray-500">{p.technology_type || '—'}</td>
@@ -247,7 +247,7 @@ export function PartsPage() {
             </div>
             <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm">
+                <div className="flex items-start gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
                   <AlertCircle size={16} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -263,7 +263,7 @@ export function PartsPage() {
               ].map(({ key, label, required }) => (
                 <div key={key}>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
-                    {label}{required && <span className="text-red-400 ml-0.5">*</span>}
+                    {label}{required && <span className="text-emerald-500 ml-0.5">*</span>}
                   </label>
                   <input
                     type="text"

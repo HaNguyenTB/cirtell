@@ -16,14 +16,14 @@ export function LoginPage() {
       {/* Background decoration */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-b from-emerald-100/60 to-transparent rounded-full blur-3xl" />
-        <div className="absolute bottom-0 right-0 w-80 h-80 bg-gradient-to-tl from-teal-50 to-transparent rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-0 w-80 h-80 bg-gradient-to-tl from-green-50 to-transparent rounded-full blur-3xl" />
       </div>
 
       <div className="w-full max-w-sm mx-auto px-4 animate-zoom-in">
         <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl shadow-gray-900/10 border border-white/60 p-8">
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mb-4
+            <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-emerald-700 rounded-2xl flex items-center justify-center mb-4
                             shadow-lg shadow-emerald-500/25">
               <Recycle className="text-white" size={26} />
             </div>
@@ -33,7 +33,7 @@ export function LoginPage() {
 
           {/* Error */}
           {error && (
-            <div className="animate-slide-up mb-5 flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm">
+            <div className="animate-slide-up mb-5 flex items-start gap-2.5 p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>

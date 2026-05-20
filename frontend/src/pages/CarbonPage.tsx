@@ -42,9 +42,9 @@ const emptyForm = {
 };
 
 const scopeStyles: Record<number, { badge: string; gradient: string; border: string }> = {
-  1: { badge: 'bg-red-50 text-red-700 border-red-100', gradient: 'from-red-500 to-rose-400', border: 'border-red-400' },
-  2: { badge: 'bg-amber-50 text-amber-700 border-amber-100', gradient: 'from-amber-500 to-yellow-400', border: 'border-amber-400' },
-  3: { badge: 'bg-blue-50 text-blue-700 border-blue-100', gradient: 'from-blue-500 to-sky-400', border: 'border-blue-400' },
+  1: { badge: 'bg-lime-50 text-lime-800 border-lime-100', gradient: 'from-lime-400 to-green-500', border: 'border-lime-400' },
+  2: { badge: 'bg-green-50 text-green-800 border-green-100', gradient: 'from-green-500 to-emerald-600', border: 'border-green-500' },
+  3: { badge: 'bg-emerald-50 text-emerald-800 border-emerald-100', gradient: 'from-emerald-600 to-green-800', border: 'border-emerald-600' },
 };
 
 export function CarbonPage() {
@@ -149,7 +149,7 @@ export function CarbonPage() {
   const scopeLabel = (s: number) => s === 1 ? 'Scope 1' : s === 2 ? 'Scope 2' : 'Scope 3';
 
   const summaryCards = report ? [
-    { label: 'Total Emissions', value: report.total_kg, gradient: 'from-gray-700 to-gray-500', isMain: true },
+    { label: 'Total Emissions', value: report.total_kg, gradient: 'from-emerald-800 to-green-600', isMain: true },
     { label: 'Scope 1 — Direct', value: report.scope1_kg, ...scopeStyles[1] },
     { label: 'Scope 2 — Energy', value: report.scope2_kg, ...scopeStyles[2] },
     { label: 'Scope 3 — Value Chain', value: report.scope3_kg, ...scopeStyles[3] },
@@ -255,11 +255,11 @@ export function CarbonPage() {
                     <td className="px-4 py-3.5 text-right font-semibold text-gray-900 tabular-nums">{e.co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
                     <td className="px-4 py-3.5 text-gray-400 text-xs tabular-nums">{e.reporting_period_start} → {e.reporting_period_end}</td>
                     <td className="px-4 py-3.5">
-                      <span className="badge bg-gray-100 text-gray-600 capitalize">{e.data_quality}</span>
+                      <span className="badge bg-emerald-50 text-emerald-800 capitalize">{e.data_quality}</span>
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3.5 text-right">
-                        <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-red-500">
+                        <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-emerald-700">
                           <Trash2 size={14} />
                         </button>
                       </td>
@@ -282,7 +282,7 @@ export function CarbonPage() {
             </div>
             <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm">
+                <div className="flex items-start gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
                   <AlertCircle size={16} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -290,7 +290,7 @@ export function CarbonPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Scope <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Scope <span className="text-emerald-500">*</span></label>
                   <select value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, category_id: '' })} className="input-base">
                     <option value="1">Scope 1 — Direct</option>
                     <option value="2">Scope 2 — Energy</option>
@@ -299,7 +299,7 @@ export function CarbonPage() {
                 </div>
                 {form.scope === '3' && (
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category <span className="text-red-400">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category <span className="text-emerald-500">*</span></label>
                     <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} className="input-base">
                       <option value="">Select...</option>
                       {categories.map((c) => <option key={c.id} value={c.id}>{c.id}. {c.name}</option>)}
@@ -309,18 +309,18 @@ export function CarbonPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Description <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Source Description <span className="text-emerald-500">*</span></label>
                 <input type="text" value={form.source_description} onChange={(e) => setForm({ ...form, source_description: e.target.value })}
                   className="input-base" placeholder="e.g. Natural gas combustion - Boiler #1" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Activity Data <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Activity Data <span className="text-emerald-500">*</span></label>
                   <input type="number" step="0.01" value={form.activity_data} onChange={(e) => setForm({ ...form, activity_data: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Unit <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Unit <span className="text-emerald-500">*</span></label>
                   <input type="text" value={form.activity_unit} onChange={(e) => setForm({ ...form, activity_unit: e.target.value })}
                     className="input-base" placeholder="e.g. m³, kWh, km, kg" />
                 </div>
@@ -328,7 +328,7 @@ export function CarbonPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Emission Factor <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Emission Factor <span className="text-emerald-500">*</span></label>
                   <input type="number" step="0.0001" value={form.emission_factor} onChange={(e) => setForm({ ...form, emission_factor: e.target.value })} className="input-base" />
                 </div>
                 <div>
@@ -339,11 +339,11 @@ export function CarbonPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period Start <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period Start <span className="text-emerald-500">*</span></label>
                   <input type="date" value={form.reporting_period_start} onChange={(e) => setForm({ ...form, reporting_period_start: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period End <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Period End <span className="text-emerald-500">*</span></label>
                   <input type="date" value={form.reporting_period_end} onChange={(e) => setForm({ ...form, reporting_period_end: e.target.value })} className="input-base" />
                 </div>
               </div>

@@ -35,10 +35,10 @@ const emptyForm = {
 };
 
 const movementColor: Record<string, string> = {
-  Purchase: 'bg-blue-50 text-blue-700 border-blue-100',
-  Sale: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-  Redeploy: 'bg-amber-50 text-amber-700 border-amber-100',
-  Recycle: 'bg-violet-50 text-violet-700 border-violet-100',
+  Purchase: 'bg-lime-50 text-lime-800 border-lime-100',
+  Sale: 'bg-green-50 text-green-800 border-green-100',
+  Redeploy: 'bg-emerald-50 text-emerald-800 border-emerald-100',
+  Recycle: 'bg-green-100 text-green-900 border-green-200',
 };
 
 export function TransactionsPage() {
@@ -201,7 +201,7 @@ export function TransactionsPage() {
                   <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-4 py-3.5 font-medium text-gray-900 tabular-nums">{tx.date}</td>
                     <td className="px-4 py-3.5">
-                      <span className={`badge border ${movementColor[tx.movementType] || 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`badge border ${movementColor[tx.movementType] || 'bg-green-100 text-green-900 border-green-200'}`}>
                         {tx.movementType}
                       </span>
                     </td>
@@ -246,18 +246,18 @@ export function TransactionsPage() {
             </div>
             <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm">
+                <div className="flex items-start gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm">
                   <AlertCircle size={16} className="shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Date <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Date <span className="text-emerald-500">*</span></label>
                   <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input-base" />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Movement Type <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Movement Type <span className="text-emerald-500">*</span></label>
                   <select value={form.movement_type} onChange={(e) => setForm({ ...form, movement_type: e.target.value })} className="input-base">
                     {MOVEMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
@@ -265,7 +265,7 @@ export function TransactionsPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-red-400">*</span></label>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Quantity <span className="text-emerald-500">*</span></label>
                   <input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="input-base" />
                 </div>
                 <div>

@@ -19,37 +19,37 @@ const features = [
     icon: Package,
     title: 'Parts Catalog',
     desc: 'Central registry for telecom equipment with vendor mapping, weight tracking, and emission factors.',
-    color: 'from-blue-500 to-cyan-400',
+    color: 'from-emerald-400 to-emerald-600',
   },
   {
     icon: ArrowLeftRight,
     title: 'Transaction Tracking',
     desc: 'Record purchases, sales, redeployments, and recycling with a complete audit trail.',
-    color: 'from-violet-500 to-purple-400',
+    color: 'from-green-500 to-emerald-700',
   },
   {
     icon: Warehouse,
     title: 'Warehouse Management',
     desc: 'Multi-warehouse inventory with zones, stock movements, and real-time visibility.',
-    color: 'from-amber-500 to-orange-400',
+    color: 'from-lime-500 to-green-600',
   },
   {
     icon: Leaf,
     title: 'Carbon Accounting',
     desc: 'Scope 1/2/3 GHG emission tracking with category breakdowns and compliance reports.',
-    color: 'from-emerald-500 to-teal-400',
+    color: 'from-emerald-500 to-green-700',
   },
   {
     icon: BarChart3,
     title: 'Dashboard & KPIs',
     desc: 'Live headline metrics for parts, transactions, and emissions at a glance.',
-    color: 'from-pink-500 to-rose-400',
+    color: 'from-green-600 to-emerald-800',
   },
   {
     icon: Shield,
     title: 'Secure by Design',
     desc: 'Google SSO, role-based access control, rate limiting, and full audit logging.',
-    color: 'from-slate-600 to-gray-500',
+    color: 'from-emerald-700 to-green-900',
   },
 ];
 
@@ -70,10 +70,10 @@ export function LandingPage() {
       <nav className="sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-sm shadow-emerald-500/25">
+            <div className="w-9 h-9 bg-gradient-to-br from-green-500 to-emerald-700 rounded-xl flex items-center justify-center shadow-sm shadow-emerald-500/25">
               <Recycle className="text-white" size={18} />
             </div>
-            <span className="text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
+            <span className="text-xl font-bold bg-gradient-to-r from-emerald-900 to-green-600 bg-clip-text text-transparent">
               Cirtell
             </span>
           </div>
@@ -88,9 +88,9 @@ export function LandingPage() {
       <section className="relative overflow-hidden">
         {/* Background decoration */}
         <div className="absolute inset-0 -z-10">
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-gradient-to-b from-emerald-50 via-teal-50/50 to-transparent rounded-full blur-3xl" />
-          <div className="absolute top-20 right-0 w-72 h-72 bg-gradient-to-bl from-blue-50 to-transparent rounded-full blur-3xl" />
-          <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-violet-50/50 to-transparent rounded-full blur-3xl" />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-gradient-to-b from-emerald-50 via-green-50/50 to-transparent rounded-full blur-3xl" />
+          <div className="absolute top-20 right-0 w-72 h-72 bg-gradient-to-bl from-lime-50 to-transparent rounded-full blur-3xl" />
+          <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-green-50/50 to-transparent rounded-full blur-3xl" />
         </div>
 
         <div className="max-w-6xl mx-auto px-6 pt-24 pb-20 text-center">
@@ -103,7 +103,7 @@ export function LandingPage() {
 
           <h1 className="animate-slide-up text-5xl sm:text-6xl lg:text-7xl font-extrabold text-gray-900 leading-[1.1] max-w-4xl mx-auto tracking-tight">
             Track telecom assets from{' '}
-            <span className="bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-500 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-emerald-700 via-green-600 to-lime-500 bg-clip-text text-transparent">
               deployment to decommission
             </span>
           </h1>
@@ -118,8 +118,8 @@ export function LandingPage() {
                style={{ animationDelay: '0.2s', animationFillMode: 'both' }}>
             <button
               onClick={() => navigate(cta)}
-              className="group inline-flex items-center gap-2 px-7 py-3.5 bg-gray-900 text-white rounded-2xl text-sm font-semibold
-                         shadow-xl shadow-gray-900/20 hover:shadow-2xl hover:shadow-gray-900/30 hover:bg-gray-800
+              className="group inline-flex items-center gap-2 px-7 py-3.5 bg-emerald-800 text-white rounded-2xl text-sm font-semibold
+                         shadow-xl shadow-emerald-800/20 hover:shadow-2xl hover:shadow-emerald-800/30 hover:bg-emerald-900
                          active:scale-[0.98] transition-all duration-200"
             >
               Get Started
@@ -185,7 +185,7 @@ export function LandingPage() {
       </section>
 
       {/* ── CTA ── */}
-      <section className="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 py-20">
+      <section className="bg-gradient-to-br from-emerald-950 via-green-900 to-emerald-950 py-20">
         <div className="max-w-6xl mx-auto px-6 text-center">
           <div className="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-sm border border-white/10">
             <Recycle className="text-emerald-400" size={28} />
@@ -212,7 +212,7 @@ export function LandingPage() {
       <footer className="border-t border-gray-100 bg-white py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+            <div className="w-6 h-6 bg-gradient-to-br from-green-500 to-emerald-700 rounded-lg flex items-center justify-center">
               <Recycle className="text-white" size={12} />
             </div>
             <span className="text-sm font-semibold text-gray-400">Cirtell</span>
