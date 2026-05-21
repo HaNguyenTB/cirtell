@@ -1,6 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
+  ArrowDownLeft,
+  ArrowLeft,
+  ArrowRight,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -13,14 +17,19 @@ import {
   DollarSign,
   Download,
   FileText,
+  FolderKanban,
   Loader2,
+  Package,
   Pencil,
   Plus,
   Receipt,
+  Recycle as RecycleIcon,
+  RefreshCw,
   Search,
   ShoppingCart,
   Trash2,
   Upload,
+  Warehouse,
   X,
 } from 'lucide-react';
 import { apiRequest } from '../lib/api';
@@ -158,6 +167,21 @@ interface ProjectOption {
   projectName: string;
 }
 
+interface AvailableDevice {
+  id: string;
+  serial_number?: string | null;
+  asset_tag?: string | null;
+  condition_grade?: string | null;
+  part_id: string;
+  warehouse_id?: string | null;
+  current_value?: number | null;
+  part_number: string;
+  model_name?: string | null;
+  vendor?: string | null;
+  warehouse_code?: string | null;
+  warehouse_name?: string | null;
+}
+
 interface AddForm {
   date: string;
   movement_type: MovementType;
@@ -181,6 +205,9 @@ interface EditForm extends AddForm {
 
 interface LineItemDraft {
   localId: string;
+  device_id?: string;
+  part_name?: string | null;
+  vendor?: string | null;
   part_id: string;
   part_number: string;
   quantity: string;
@@ -240,6 +267,31 @@ function createLineItemDraft(): LineItemDraft {
   };
 }
 
+function createLineItemFromDevice(device: AvailableDevice): LineItemDraft {
+  const conditionMap: Record<string, string> = {
+    A: 'NIB',
+    B: 'Used',
+    C: 'Refurbished',
+    D: 'As-Is',
+  };
+
+  return {
+    localId: crypto.randomUUID(),
+    device_id: device.id,
+    part_id: device.part_id,
+    part_number: device.part_number,
+    part_name: device.model_name,
+    vendor: device.vendor,
+    quantity: '1',
+    unit_price_usd: device.current_value ? String(device.current_value) : '0',
+    serial_number: device.serial_number || device.asset_tag || '',
+    condition: conditionMap[device.condition_grade || ''] || device.condition_grade || '',
+    source_warehouse_id: device.warehouse_id || '',
+    destination_warehouse_id: '',
+    notes: '',
+  };
+}
+
 function formatCurrency(value: number | null | undefined): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -256,15 +308,15 @@ function getErrorMessage(error: unknown, fallback: string): string {
 function movementBadgeClass(type: string): string {
   switch (type) {
     case 'Purchase':
-      return 'bg-signal-teal/15 text-signal-teal';
+      return 'bg-signal-teal/10 text-signal-teal border-signal-teal/20';
     case 'Sale':
-      return 'bg-verified-green/15 text-verified-green';
+      return 'bg-green-50 text-green-700 border-green-100';
     case 'Redeploy':
-      return 'bg-blue-500/15 text-blue-600';
+      return 'bg-orange-50 text-orange-700 border-orange-100';
     case 'Recycle':
-      return 'bg-amber-500/15 text-amber-600';
+      return 'bg-gray-50 text-gray-700 border-gray-100';
     default:
-      return 'bg-gray-100 text-gray-600';
+      return 'bg-gray-50 text-gray-700 border-gray-100';
   }
 }
 
@@ -407,6 +459,15 @@ async function fetchProjectsApi(): Promise<ProjectOption[]> {
 async function fetchTransactionItemsApi(transactionId: string): Promise<TransactionItemDetail[]> {
   const response = await apiRequest<{ items: TransactionItemDetail[] }>(`/api/transactions/items/${transactionId}`);
   return response.items || [];
+}
+
+async function fetchAvailableDevicesApi(search?: string): Promise<AvailableDevice[]> {
+  const response = await apiRequest<{ devices: AvailableDevice[] }>('/api/transactions/devices-available', {
+    params: {
+      search: search || undefined,
+    },
+  });
+  return response.devices || [];
 }
 
 export function TransactionsPage() {
@@ -734,47 +795,66 @@ function TransactionFiltersPanel({ filters, onFiltersChange }: FiltersPanelProps
   const updateFilter = (field: keyof TransactionFilters, value: string) => {
     onFiltersChange({ ...filters, [field]: value });
   };
+  const activeFilterCount = [filters.searchTerm, filters.startDate, filters.endDate, filters.type].filter(Boolean).length;
 
   return (
-    <div className="rounded-apple-md border border-gray-200 bg-white p-4 shadow-none dark:border-white/[0.04] dark:bg-surface-card">
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.5fr_1fr_1fr_1fr_auto]">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+    <div className="mb-6 rounded-apple-lg border border-gray-100 bg-white p-4 shadow-none dark:border-white/[0.04] dark:bg-surface-card">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className={`absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 ${filters.searchTerm ? 'text-signal-teal' : 'text-gray-400'}`} />
           <input
             value={filters.searchTerm}
             onChange={(event) => updateFilter('searchTerm', event.target.value)}
             placeholder="Search part number, market, vendor..."
-            className="input-base pl-10"
+            className={`w-full rounded-pill border bg-white py-2.5 pl-11 pr-4 text-caption text-gray-900 shadow-none transition-all duration-200 hover:shadow-apple-sm focus:outline-none focus:ring-2 focus:ring-signal-teal/40 dark:bg-surface-card dark:text-white ${
+              filters.searchTerm ? 'border-signal-teal/60' : 'border-gray-200 dark:border-white/[0.04]'
+            }`}
+          />
+          {filters.searchTerm && (
+            <button
+              onClick={() => updateFilter('searchTerm', '')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 transition-colors hover:bg-gray-100 dark:hover:bg-white/10"
+            >
+              <X className="h-3.5 w-3.5 text-gray-400" />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={filters.startDate}
+            onChange={(event) => updateFilter('startDate', event.target.value)}
+            className="rounded-pill border border-gray-200 bg-white px-4 py-2.5 text-caption text-gray-900 shadow-none transition-all hover:shadow-apple-sm focus:outline-none focus:ring-2 focus:ring-signal-teal/40 dark:border-white/[0.04] dark:bg-surface-card dark:text-white"
+          />
+          <span className="text-caption font-medium text-gray-400">to</span>
+          <input
+            type="date"
+            value={filters.endDate}
+            onChange={(event) => updateFilter('endDate', event.target.value)}
+            className="rounded-pill border border-gray-200 bg-white px-4 py-2.5 text-caption text-gray-900 shadow-none transition-all hover:shadow-apple-sm focus:outline-none focus:ring-2 focus:ring-signal-teal/40 dark:border-white/[0.04] dark:bg-surface-card dark:text-white"
           />
         </div>
-        <input
-          type="date"
-          value={filters.startDate}
-          onChange={(event) => updateFilter('startDate', event.target.value)}
-          className="input-base"
-        />
-        <input
-          type="date"
-          value={filters.endDate}
-          onChange={(event) => updateFilter('endDate', event.target.value)}
-          className="input-base"
-        />
         <select
           value={filters.type}
           onChange={(event) => updateFilter('type', event.target.value)}
-          className="input-base"
+          className={`min-w-[140px] rounded-pill border bg-white px-4 py-2.5 text-caption shadow-none transition-all hover:shadow-apple-sm focus:outline-none focus:ring-2 focus:ring-signal-teal/40 dark:bg-surface-card ${
+            filters.type ? 'border-signal-teal/60 text-gray-900 dark:text-white' : 'border-gray-200 text-gray-500 dark:border-white/[0.04] dark:text-gray-400'
+          }`}
         >
           <option value="">All Types</option>
           {MOVEMENT_TYPES.map((type) => (
             <option key={type} value={type}>{type}</option>
           ))}
         </select>
-        <button
-          onClick={() => onFiltersChange(DEFAULT_FILTERS)}
-          className="rounded-apple-md border border-gray-200 px-4 py-2.5 text-caption font-medium text-gray-600 transition-colors hover:bg-gray-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-surface-hover"
-        >
-          Reset
-        </button>
+        {activeFilterCount > 0 && (
+          <button
+            onClick={() => onFiltersChange(DEFAULT_FILTERS)}
+            className="flex items-center gap-2 rounded-pill bg-gradient-to-br from-signal-teal to-deep-teal px-4 py-2.5 text-caption font-medium text-white shadow-none transition-all hover:shadow-apple-sm"
+          >
+            <X className="h-4 w-4" />
+            Clear{activeFilterCount > 1 ? ` (${activeFilterCount})` : ''}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -998,7 +1078,7 @@ function TransactionsTable({
                     </td>
                   </tr>
                   {expandedTxn === transaction.id && (
-                    <tr className="bg-signal-teal/5 dark:bg-signal-teal/10">
+                    <tr className="animate-dropdown-in bg-signal-teal/5 dark:bg-signal-teal/10">
                       <td colSpan={13} className="px-6 py-3">
                         <ExpandedLineItems items={expandedItems} loading={expandedLoading} />
                       </td>
@@ -1056,8 +1136,24 @@ function TransactionsTable({
 }
 
 function TransactionMovementBadge({ type }: { type: string }) {
+  const Icon = (() => {
+    switch (type) {
+      case 'Sale':
+        return <ArrowUpRight className="h-4 w-4 text-verified-green" />;
+      case 'Purchase':
+        return <ArrowDownLeft className="h-4 w-4 text-signal-teal" />;
+      case 'Redeploy':
+        return <RefreshCw className="h-4 w-4 text-amber-500" />;
+      case 'Recycle':
+        return <RecycleIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />;
+      default:
+        return null;
+    }
+  })();
+
   return (
-    <span className={`inline-flex rounded-pill px-2.5 py-1 text-micro font-semibold ${movementBadgeClass(type)}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-pill border px-2.5 py-1 text-micro font-medium ${movementBadgeClass(type)}`}>
+      {Icon}
       {type}
     </span>
   );
@@ -1169,11 +1265,16 @@ interface AddTransactionModalProps extends ModalReferenceProps {
 }
 
 function AddTransactionModal({ parts, markets, warehouses, projects, onClose, onCreated }: AddTransactionModalProps) {
-  const [step, setStep] = useState(0);
-  const [mode, setMode] = useState<'single' | 'multi'>('single');
+  const [step, setStep] = useState(1);
+  const [itemsMode, setItemsMode] = useState<'simple' | 'multi'>('simple');
   const [form, setForm] = useState<AddForm>(DEFAULT_ADD_FORM);
-  const [items, setItems] = useState<LineItemDraft[]>([createLineItemDraft()]);
+  const [items, setItems] = useState<LineItemDraft[]>([]);
   const [poFile, setPoFile] = useState<File | null>(null);
+  const poFileRef = useRef<HTMLInputElement>(null);
+  const [availableDevices, setAvailableDevices] = useState<AvailableDevice[]>([]);
+  const [deviceSearch, setDeviceSearch] = useState('');
+  const [deviceLoading, setDeviceLoading] = useState(false);
+  const [showDevicePicker, setShowDevicePicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -1190,7 +1291,8 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
   }, [items]);
 
   const simpleTotal = Number(form.quantity || 0) * Number(form.unit_price_usd || 0);
-  const activeTotal = mode === 'single' ? simpleTotal : lineItemTotals.total;
+  const activeQuantity = itemsMode === 'multi' && items.length > 0 ? lineItemTotals.quantity : Number(form.quantity || 0);
+  const activeTotal = itemsMode === 'multi' && items.length > 0 ? lineItemTotals.total : simpleTotal;
 
   const updateForm = <K extends keyof AddForm>(field: K, value: AddForm[K]) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1202,13 +1304,14 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
 
   const validate = (): string | null => {
     if (!form.date) return 'Date is required';
-    if (mode === 'single') {
+    if (itemsMode === 'simple') {
       if (!form.part_id && !form.part_number.trim()) return 'Select a part or enter a new part number';
       if (Number(form.quantity) <= 0) return 'Quantity must be greater than zero';
       if (Number(form.unit_price_usd || 0) < 0) return 'Unit price must be zero or greater';
       return null;
     }
 
+    if (items.length === 0) return 'Add at least one line item';
     for (const item of items) {
       if (!item.part_id && !item.part_number.trim()) return 'Each line item needs a part';
       if (Number(item.quantity) <= 0) return 'Each line item needs a positive quantity';
@@ -1216,6 +1319,62 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
     }
     return null;
   };
+
+  const goNext = () => {
+    setError('');
+    if (step === 1) {
+      if (!form.market_id) {
+        setError('Please select a market');
+        return;
+      }
+    }
+    if (step === 2) {
+      const validationError = validate();
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+    }
+    setStep((current) => Math.min(3, current + 1));
+  };
+
+  const searchDevices = useCallback(async (query?: string) => {
+    setDeviceLoading(true);
+    try {
+      setAvailableDevices(await fetchAvailableDevicesApi(query));
+    } catch (searchError) {
+      setError(getErrorMessage(searchError, 'Failed to search inventory'));
+    } finally {
+      setDeviceLoading(false);
+    }
+  }, []);
+
+  const addDeviceAsLineItem = useCallback((device: AvailableDevice) => {
+    setItems((current) => [...current, createLineItemFromDevice(device)]);
+    setForm((current) => ({
+      ...current,
+      vendor: device.vendor || current.vendor,
+      part_id: current.part_id || device.part_id,
+    }));
+    setShowDevicePicker(false);
+  }, []);
+
+  const addBlankLineItem = useCallback(() => {
+    const selectedPart = parts.find((part) => part.id === form.part_id);
+    setItems((current) => [
+      ...current,
+      {
+        ...createLineItemDraft(),
+        part_id: form.part_id,
+        part_number: selectedPart?.partNumber || form.part_number,
+        part_name: selectedPart?.partName,
+        vendor: selectedPart?.vendor || form.vendor,
+        unit_price_usd: form.unit_price_usd || '0',
+        source_warehouse_id: form.source_warehouse_id,
+        destination_warehouse_id: form.destination_warehouse_id,
+      },
+    ]);
+  }, [form.destination_warehouse_id, form.part_id, form.part_number, form.source_warehouse_id, form.unit_price_usd, form.vendor, parts]);
 
   const handleSubmit = async () => {
     const validationError = validate();
@@ -1238,7 +1397,7 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
         po_number: form.po_number.trim() || undefined,
       };
 
-      const payload = mode === 'single'
+      const payload = itemsMode === 'simple'
         ? {
           ...commonPayload,
           part_id: form.part_id || undefined,
@@ -1259,6 +1418,7 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
             unit_price_usd: Number(item.unit_price_usd || 0),
             serial_number: item.serial_number.trim() || undefined,
             condition: item.condition || undefined,
+            device_id: item.device_id || undefined,
             source_warehouse_id: item.source_warehouse_id || form.source_warehouse_id || undefined,
             destination_warehouse_id: item.destination_warehouse_id || form.destination_warehouse_id || undefined,
             notes: item.notes.trim() || undefined,
@@ -1278,96 +1438,171 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
     }
   };
 
-  return (
-    <ModalShell title="Add Transaction" onClose={onClose} widthClass="max-w-2xl">
-      <div className="border-b border-gray-100 px-6 py-4 dark:border-white/[0.04]">
-        <StepIndicator step={step} labels={['Details', 'Items & Pricing', 'Logistics & Submit']} />
-      </div>
-      <div className="max-h-[68vh] overflow-y-auto px-6 py-5">
-        {error && <ModalError message={error} />}
-        {step === 0 && (
-          <div className="grid gap-5 md:grid-cols-2">
-            <Field label="Date" required>
-              <input type="date" value={form.date} onChange={(event) => updateForm('date', event.target.value)} className="input-base" />
-            </Field>
-            <Field label="Market">
-              <select value={form.market_id} onChange={(event) => updateForm('market_id', event.target.value)} className="input-base">
-                <option value="">Global</option>
-                {markets.map((market) => (
-                  <option key={market.id} value={market.id}>{market.marketName}</option>
-                ))}
-              </select>
-            </Field>
-            <div className="md:col-span-2">
-              <Field label="Movement Type" required>
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative mx-4 flex max-h-[90vh] w-full max-w-2xl flex-col rounded-apple-lg border border-gray-200 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-surface-card">
+        <div className="flex-shrink-0 border-b border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Add Transaction</h2>
+            <button onClick={onClose} className="rounded-apple p-1 hover:bg-gray-100 dark:hover:bg-surface-hover">
+              <X className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+            </button>
+          </div>
+          <StepIndicator step={step} labels={['Details', 'Items & Pricing', 'Logistics & Submit']} onStepClick={(nextStep) => {
+            if (nextStep < step) setStep(nextStep);
+          }} />
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {error && <ModalError message={error} />}
+
+          {step === 1 && (
+            <>
+              <div>
+                <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Date</label>
+                <input type="date" value={form.date} onChange={(event) => updateForm('date', event.target.value)} className="input-base rounded-apple" />
+              </div>
+              <div>
+                <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Movement Type</label>
                 <MovementTypeSelector value={form.movement_type} onChange={(value) => updateForm('movement_type', value)} />
-              </Field>
-            </div>
-          </div>
-        )}
-        {step === 1 && (
-          <div className="space-y-5">
-            <div className="inline-flex rounded-apple-md border border-gray-200 bg-gray-50 p-1 dark:border-white/10 dark:bg-surface-card-alt">
-              <button
-                onClick={() => setMode('single')}
-                className={`rounded-apple px-4 py-2 text-caption font-medium transition-colors ${mode === 'single' ? 'bg-white text-signal-teal shadow-sm dark:bg-surface-card' : 'text-gray-500'}`}
-              >
-                Single Item
-              </button>
-              <button
-                onClick={() => setMode('multi')}
-                className={`rounded-apple px-4 py-2 text-caption font-medium transition-colors ${mode === 'multi' ? 'bg-white text-signal-teal shadow-sm dark:bg-surface-card' : 'text-gray-500'}`}
-              >
-                Multiple Items
-              </button>
-            </div>
-            {mode === 'single' ? (
-              <SingleItemFields form={form} parts={parts} onChange={setForm} />
-            ) : (
-              <MultiItemFields
-                items={items}
-                parts={parts}
-                warehouses={warehouses}
-                onAdd={() => setItems((current) => [...current, createLineItemDraft()])}
-                onRemove={(id) => setItems((current) => current.length === 1 ? current : current.filter((item) => item.localId !== id))}
-                onChange={updateItem}
-                onPartSelected={(part) => setForm((current) => ({ ...current, vendor: part.vendor || current.vendor }))}
-              />
-            )}
-          </div>
-        )}
-        {step === 2 && (
-          <LogisticsFields
-            form={form}
-            warehouses={warehouses}
-            projects={projects}
-            poFile={poFile}
-            totalValue={activeTotal}
-            onFormChange={setForm}
-            onFileChange={setPoFile}
-          />
-        )}
-      </div>
-      <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50/50 px-6 py-4 dark:border-white/[0.04] dark:bg-surface-card-alt">
-        <button onClick={onClose} className="btn-secondary">Cancel</button>
-        <div className="flex items-center gap-2">
-          {step > 0 && (
-            <button onClick={() => setStep((current) => Math.max(0, current - 1))} className="btn-secondary">
-              Back
-            </button>
+              </div>
+              <div>
+                <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Market</label>
+                <select value={form.market_id} onChange={(event) => updateForm('market_id', event.target.value)} className="input-base rounded-apple">
+                  <option value="">Select market...</option>
+                  {markets.map((market) => (
+                    <option key={market.id} value={market.id}>
+                      {market.marketName}{market.region ? ` (${market.region})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
           )}
-          {step < 2 ? (
-            <button onClick={() => setStep((current) => Math.min(2, current + 1))} className="btn-primary">
-              Next
-            </button>
-          ) : (
-            <button onClick={handleSubmit} disabled={saving} className="btn-primary">
-              {saving ? 'Saving...' : 'Submit Transaction'}
-            </button>
+
+          {step === 2 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-apple-md border border-gray-200 bg-gray-50 p-3 dark:border-white/[0.06] dark:bg-surface-card-alt">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setItemsMode('simple');
+                    setItems([]);
+                  }}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-apple px-4 py-3 text-caption font-medium transition-all ${
+                    itemsMode === 'simple'
+                      ? 'border border-gray-200 bg-white text-gray-900 shadow-none dark:border-white/10 dark:bg-surface-card dark:text-white'
+                      : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                  }`}
+                >
+                  <Package className="h-4 w-4" />
+                  Simple Transaction
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setItemsMode('multi')}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-apple px-4 py-3 text-caption font-medium transition-all ${
+                    itemsMode === 'multi'
+                      ? 'border border-gray-200 bg-white text-gray-900 shadow-none dark:border-white/10 dark:bg-surface-card dark:text-white'
+                      : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                  }`}
+                >
+                  <Cpu className="h-4 w-4" />
+                  Multi-Item
+                </button>
+              </div>
+
+              {itemsMode === 'simple' ? (
+                <SingleItemFields form={form} parts={parts} onChange={setForm} />
+              ) : (
+                <MultiItemFields
+                  availableDevices={availableDevices}
+                  deviceLoading={deviceLoading}
+                  deviceSearch={deviceSearch}
+                  items={items}
+                  parts={parts}
+                  showDevicePicker={showDevicePicker}
+                  warehouses={warehouses}
+                  onAdd={addBlankLineItem}
+                  onAddDevice={addDeviceAsLineItem}
+                  onRemove={(id) => setItems((current) => current.filter((item) => item.localId !== id))}
+                  onSearchDevices={searchDevices}
+                  onChange={updateItem}
+                  onPartSelected={(part) => setForm((current) => ({ ...current, vendor: part.vendor || current.vendor }))}
+                  setDeviceSearch={setDeviceSearch}
+                  setShowDevicePicker={setShowDevicePicker}
+                />
+              )}
+            </div>
+          )}
+
+          {step === 3 && (
+            <LogisticsFields
+              form={form}
+              itemCount={items.length}
+              itemsMode={itemsMode}
+              markets={markets}
+              parts={parts}
+              projects={projects}
+              poFile={poFile}
+              poFileRef={poFileRef}
+              quantity={activeQuantity}
+              totalValue={activeTotal}
+              warehouses={warehouses}
+              onFormChange={setForm}
+              onFileChange={setPoFile}
+            />
           )}
         </div>
+
+        <div className="flex flex-shrink-0 items-center justify-between border-t border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <div>
+            {step > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStep((current) => Math.max(1, current - 1));
+                  setError('');
+                }}
+                className="flex items-center gap-1.5 rounded-apple px-4 py-2 text-caption font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-surface-hover"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              className="rounded-apple px-4 py-2 text-caption font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-surface-hover"
+            >
+              Cancel
+            </button>
+            {step < 3 ? (
+              <button
+                type="button"
+                onClick={goNext}
+                className="flex items-center gap-1.5 rounded-apple bg-signal-teal px-5 py-2 text-caption font-medium text-white transition-colors hover:bg-signal-teal/90"
+              >
+                Next
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={saving}
+                className="flex items-center gap-2 rounded-apple bg-verified-green px-5 py-2 text-caption font-medium text-white transition-colors hover:bg-verified-green/90 disabled:opacity-60"
+              >
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {saving ? 'Saving...' : 'Submit Transaction'}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </ModalShell>
+    </div>,
+    document.body,
   );
 }
 
@@ -1395,7 +1630,6 @@ function EditTransactionModal({ transaction, parts, markets, warehouses, project
     po_number: transaction.poNumber || '',
     contact_id: transaction.contactId || '',
   });
-  const [poFile, setPoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -1440,7 +1674,6 @@ function EditTransactionModal({ transaction, parts, markets, warehouses, project
           contact_id: form.contact_id || null,
         },
       });
-      if (poFile) await uploadTransactionPO(transaction.id, poFile);
       onSaved();
     } catch (submitError) {
       setError(getErrorMessage(submitError, 'Failed to update transaction'));
@@ -1449,28 +1682,20 @@ function EditTransactionModal({ transaction, parts, markets, warehouses, project
     }
   };
 
-  return (
-    <ModalShell title="Edit Transaction" onClose={onClose} widthClass="max-w-lg">
-      <div className="max-h-[72vh] overflow-y-auto px-6 py-5">
-        {error && <ModalError message={error} />}
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field label="Date" required>
-            <input type="date" value={form.date} onChange={(event) => updateForm('date', event.target.value)} className="input-base" />
-          </Field>
-          <Field label="Market">
-            <select value={form.market_id} onChange={(event) => updateForm('market_id', event.target.value)} className="input-base">
-              <option value="">Global</option>
-              {markets.map((market) => (
-                <option key={market.id} value={market.id}>{market.marketName}</option>
-              ))}
-            </select>
-          </Field>
-          <div className="md:col-span-2">
-            <Field label="Movement Type" required>
-              <MovementTypeSelector value={form.movement_type} onChange={(value) => updateForm('movement_type', value)} />
-            </Field>
-          </div>
-          <Field label="Part">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative mx-4 flex max-h-[90vh] w-full max-w-lg flex-col rounded-apple-lg border border-gray-200 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-surface-card">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Edit Transaction</h2>
+          <button onClick={onClose} className="rounded-apple p-1 hover:bg-gray-100 dark:hover:bg-surface-hover">
+            <X className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+          </button>
+        </div>
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {error && <ModalError message={error} />}
+          <div>
+            <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Part</label>
             <PartSelector
               value={form.part_id}
               partNumber={form.part_number}
@@ -1483,53 +1708,86 @@ function EditTransactionModal({ transaction, parts, markets, warehouses, project
               }))}
               onPartNumberChange={(partNumber) => updateForm('part_number', partNumber)}
             />
-          </Field>
-          <Field label="Vendor (auto-filled from part)">
-            <input value={form.vendor} onChange={(event) => updateForm('vendor', event.target.value)} className="input-base" />
-          </Field>
-          <Field label="Quantity" required>
-            <input type="number" min="1" value={form.quantity} onChange={(event) => updateForm('quantity', event.target.value)} className="input-base" />
-          </Field>
-          <Field label="Unit Price (USD)">
-            <input type="number" min="0" step="0.01" value={form.unit_price_usd} onChange={(event) => updateForm('unit_price_usd', event.target.value)} className="input-base" />
-          </Field>
-          <Field label="Serial Number">
-            <input value={form.serial_number} onChange={(event) => updateForm('serial_number', event.target.value)} className="input-base" />
-          </Field>
-          <Field label="Condition">
-            <ConditionSelect value={form.condition} onChange={(value) => updateForm('condition', value)} />
-          </Field>
-          <Field label="Source Warehouse">
-            <WarehouseSelect value={form.source_warehouse_id} warehouses={warehouses} onChange={(value) => updateForm('source_warehouse_id', value)} />
-          </Field>
-          <Field label="Destination Warehouse">
-            <WarehouseSelect value={form.destination_warehouse_id} warehouses={warehouses} onChange={(value) => updateForm('destination_warehouse_id', value)} />
-          </Field>
-          <Field label="Project">
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Date</label>
+              <input type="date" value={form.date} onChange={(event) => updateForm('date', event.target.value)} className="input-base rounded-apple" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Type</label>
+              <select value={form.movement_type} onChange={(event) => updateForm('movement_type', event.target.value as MovementType)} className="input-base rounded-apple">
+                {MOVEMENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Quantity</label>
+              <input type="number" min="1" value={form.quantity} onChange={(event) => updateForm('quantity', event.target.value)} className="input-base rounded-apple" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Unit Price (USD)</label>
+              <input type="number" min="0" step="0.01" value={form.unit_price_usd} onChange={(event) => updateForm('unit_price_usd', event.target.value)} className="input-base rounded-apple" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Serial Number</label>
+              <input type="text" value={form.serial_number} onChange={(event) => updateForm('serial_number', event.target.value)} className="input-base rounded-apple" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Condition</label>
+              <ConditionSelect value={form.condition} onChange={(value) => updateForm('condition', value)} />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Vendor</label>
+              <input type="text" value={form.vendor} onChange={(event) => updateForm('vendor', event.target.value)} className="input-base rounded-apple" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">PO Number</label>
+              <input type="text" value={form.po_number} onChange={(event) => updateForm('po_number', event.target.value)} className="input-base rounded-apple" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Source Warehouse</label>
+              <WarehouseSelect value={form.source_warehouse_id} warehouses={warehouses} onChange={(value) => updateForm('source_warehouse_id', value)} compactLabel="- None -" />
+            </div>
+            <div>
+              <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Destination Warehouse</label>
+              <WarehouseSelect value={form.destination_warehouse_id} warehouses={warehouses} onChange={(value) => updateForm('destination_warehouse_id', value)} compactLabel="- None -" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Project</label>
             <ProjectSelect value={form.project_id} projects={projects} onChange={(value) => updateForm('project_id', value)} />
-          </Field>
-          <Field label="PO Number">
-            <input value={form.po_number} onChange={(event) => updateForm('po_number', event.target.value)} className="input-base" />
-          </Field>
-          <div className="md:col-span-2">
-            <Field label="PO Document">
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-                onChange={(event) => setPoFile(event.target.files?.[0] || null)}
-                className="input-base"
-              />
-            </Field>
+          </div>
+          <div>
+            <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Market</label>
+            <select value={form.market_id} onChange={(event) => updateForm('market_id', event.target.value)} className="input-base rounded-apple">
+              <option value="">Global</option>
+              {markets.map((market) => (
+                <option key={market.id} value={market.id}>{market.marketName}</option>
+              ))}
+            </select>
           </div>
         </div>
+        <div className="flex flex-shrink-0 items-center justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <button
+            onClick={onClose}
+            className="rounded-apple px-4 py-2 text-caption font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-surface-hover"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="flex items-center gap-2 rounded-apple bg-signal-teal px-5 py-2 text-caption font-medium text-white transition-colors hover:bg-signal-teal/90 disabled:opacity-60"
+          >
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
       </div>
-      <div className="flex justify-end gap-2 border-t border-gray-100 bg-gray-50/50 px-6 py-4 dark:border-white/[0.04] dark:bg-surface-card-alt">
-        <button onClick={onClose} className="btn-secondary">Cancel</button>
-        <button onClick={handleSubmit} disabled={saving} className="btn-primary">
-          {saving ? 'Saving...' : 'Save Changes'}
-        </button>
-      </div>
-    </ModalShell>
+    </div>,
+    document.body,
   );
 }
 
@@ -1582,102 +1840,246 @@ function SingleItemFields({
 }
 
 function MultiItemFields({
+  availableDevices,
+  deviceLoading,
+  deviceSearch,
   items,
   parts,
+  showDevicePicker,
   warehouses,
   onAdd,
+  onAddDevice,
   onRemove,
+  onSearchDevices,
   onChange,
   onPartSelected,
+  setDeviceSearch,
+  setShowDevicePicker,
 }: {
+  availableDevices: AvailableDevice[];
+  deviceLoading: boolean;
+  deviceSearch: string;
   items: LineItemDraft[];
   parts: TransactionPartOption[];
+  showDevicePicker: boolean;
   warehouses: WarehouseOption[];
   onAdd: () => void;
+  onAddDevice: (device: AvailableDevice) => void;
   onRemove: (id: string) => void;
+  onSearchDevices: (query?: string) => void | Promise<void>;
   onChange: <K extends keyof LineItemDraft>(id: string, field: K, value: LineItemDraft[K]) => void;
   onPartSelected: (part: TransactionPartOption) => void;
+  setDeviceSearch: Dispatch<SetStateAction<string>>;
+  setShowDevicePicker: Dispatch<SetStateAction<boolean>>;
 }) {
   return (
-    <div className="space-y-3">
-      {items.map((item, index) => (
-        <div key={item.localId} className="rounded-apple-md border border-gray-200 p-4 dark:border-white/10">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-caption font-semibold text-gray-900 dark:text-white">Item {index + 1}</div>
-            <button onClick={() => onRemove(item.localId)} className="btn-ghost px-2 py-1 text-xs" disabled={items.length === 1}>
-              <X className="h-3.5 w-3.5" />
-              Remove
+    <>
+      <div className="flex items-center justify-between">
+        <p className="text-micro text-gray-500 dark:text-gray-400">Add individual items from inventory or manually. Qty and price are auto-calculated.</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowDevicePicker(true);
+              void onSearchDevices(deviceSearch || undefined);
+            }}
+            className="flex items-center gap-1 rounded-apple border border-signal-teal/20 bg-signal-teal/10 px-2.5 py-1.5 text-micro font-medium text-signal-teal transition-colors hover:bg-signal-teal/20"
+          >
+            <Search className="h-3 w-3" />
+            From Inventory
+          </button>
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex items-center gap-1 rounded-apple border border-gray-200 bg-gray-100 px-2.5 py-1.5 text-micro font-medium text-gray-600 transition-colors hover:bg-gray-200 dark:border-white/10 dark:bg-surface-card-alt dark:text-gray-300 dark:hover:bg-surface-hover"
+          >
+            <Plus className="h-3 w-3" />
+            Manual
+          </button>
+        </div>
+      </div>
+
+      {showDevicePicker && (
+        <div className="rounded-apple border border-signal-teal/30 bg-signal-teal/5 p-3 dark:bg-signal-teal/10">
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Search by serial, part number, IMEI..."
+              value={deviceSearch}
+              onChange={(event) => setDeviceSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void onSearchDevices(deviceSearch || undefined);
+              }}
+              className="flex-1 rounded-apple border border-gray-300 bg-white px-3 py-1.5 text-caption text-gray-900 focus:ring-2 focus:ring-signal-teal/50 dark:border-white/10 dark:bg-surface-card dark:text-white"
+            />
+            <button type="button" onClick={() => void onSearchDevices(deviceSearch || undefined)} className="rounded-apple bg-signal-teal px-3 py-1.5 text-micro font-medium text-white">
+              {deviceLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Search'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowDevicePicker(false);
+                setDeviceSearch('');
+              }}
+              className="p-1.5"
+            >
+              <X className="h-4 w-4 text-gray-400" />
             </button>
           </div>
-          <div className="grid gap-3 lg:grid-cols-4">
-            <PartSelector
-              value={item.part_id}
-              partNumber={item.part_number}
-              parts={parts}
-              compact
-              onPartChange={(partId, part) => {
-                onChange(item.localId, 'part_id', partId);
-                if (partId) onChange(item.localId, 'part_number', '');
-                if (part) onPartSelected(part);
-              }}
-              onPartNumberChange={(partNumber) => onChange(item.localId, 'part_number', partNumber)}
-            />
-            <input
-              type="number"
-              min="1"
-              value={item.quantity}
-              onChange={(event) => onChange(item.localId, 'quantity', event.target.value)}
-              placeholder="Qty"
-              className="input-base"
-            />
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={item.unit_price_usd}
-              onChange={(event) => onChange(item.localId, 'unit_price_usd', event.target.value)}
-              placeholder="Unit price"
-              className="input-base"
-            />
-            <ConditionSelect value={item.condition} onChange={(value) => onChange(item.localId, 'condition', value)} />
-            <input
-              value={item.serial_number}
-              onChange={(event) => onChange(item.localId, 'serial_number', event.target.value)}
-              placeholder="Serial number"
-              className="input-base"
-            />
-            <WarehouseSelect value={item.source_warehouse_id} warehouses={warehouses} onChange={(value) => onChange(item.localId, 'source_warehouse_id', value)} compactLabel="Source" />
-            <WarehouseSelect value={item.destination_warehouse_id} warehouses={warehouses} onChange={(value) => onChange(item.localId, 'destination_warehouse_id', value)} compactLabel="Destination" />
-            <input
-              value={item.notes}
-              onChange={(event) => onChange(item.localId, 'notes', event.target.value)}
-              placeholder="Notes"
-              className="input-base"
-            />
+          <div className="max-h-40 overflow-y-auto divide-y divide-gray-100 rounded-apple border border-gray-200 bg-white dark:divide-white/[0.04] dark:border-white/10 dark:bg-surface-card">
+            {deviceLoading ? (
+              <div className="px-3 py-4 text-center text-caption text-gray-400">
+                <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
+                Loading devices...
+              </div>
+            ) : availableDevices.length === 0 ? (
+              <div className="px-3 py-4 text-center text-caption text-gray-400">No available devices found</div>
+            ) : (
+              availableDevices.map((device) => (
+                <button
+                  key={device.id}
+                  type="button"
+                  onClick={() => onAddDevice(device)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-caption hover:bg-gray-50 dark:hover:bg-surface-hover"
+                >
+                  <div>
+                    <span className="font-medium text-gray-900 dark:text-white">{device.serial_number || device.asset_tag || 'No SN'}</span>
+                    <span className="ml-2 text-gray-500 dark:text-gray-400">{device.part_number}</span>
+                    {device.vendor && <span className="ml-1 text-micro text-gray-400">({device.vendor})</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {device.warehouse_code && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-micro text-gray-600 dark:bg-gray-700 dark:text-gray-300">{device.warehouse_code}</span>}
+                    {device.condition_grade && <span className="rounded bg-signal-teal/15 px-1.5 py-0.5 text-micro font-medium text-signal-teal">Grade {device.condition_grade}</span>}
+                  </div>
+                </button>
+              ))
+            )}
           </div>
         </div>
-      ))}
-      <button onClick={onAdd} className="btn-secondary">
-        <Plus className="h-4 w-4" />
-        Add Line Item
-      </button>
-    </div>
+      )}
+
+      {items.length > 0 ? (
+        <div className="space-y-2">
+          {items.map((item, index) => (
+            <div key={item.localId} className="rounded-apple border border-gray-200 bg-gray-50/50 p-3 dark:border-white/10 dark:bg-surface-card-alt">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 text-micro font-bold text-gray-400">{index + 1}</span>
+                  {item.device_id ? (
+                    <span className="rounded-pill bg-signal-teal/10 px-1.5 py-0.5 text-micro font-medium text-signal-teal">Inventory</span>
+                  ) : (
+                    <span className="rounded-pill bg-gray-200 px-1.5 py-0.5 text-micro font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">Manual</span>
+                  )}
+                  <span className="text-caption font-medium text-gray-900 dark:text-white">{item.part_number || 'No part'}</span>
+                  {item.part_name && <span className="text-micro text-gray-500">{item.part_name}</span>}
+                </div>
+                <button type="button" onClick={() => onRemove(item.localId)} className="rounded p-1 hover:bg-red-100 dark:hover:bg-red-900/30">
+                  <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <PartSelector
+                  value={item.part_id}
+                  partNumber={item.part_number}
+                  parts={parts}
+                  compact
+                  onPartChange={(partId, part) => {
+                    onChange(item.localId, 'part_id', partId);
+                    if (partId) onChange(item.localId, 'part_number', part?.partNumber || '');
+                    if (part) {
+                      onChange(item.localId, 'part_name', part.partName || '');
+                      onChange(item.localId, 'vendor', part.vendor || '');
+                      onPartSelected(part);
+                    }
+                  }}
+                  onPartNumberChange={(partNumber) => onChange(item.localId, 'part_number', partNumber)}
+                />
+                <input
+                  type="text"
+                  value={item.serial_number}
+                  onChange={(event) => onChange(item.localId, 'serial_number', event.target.value)}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white"
+                  placeholder="Serial #"
+                  readOnly={Boolean(item.device_id)}
+                />
+                <ConditionSelect value={item.condition} onChange={(value) => onChange(item.localId, 'condition', value)} compact />
+                <input
+                  type="number"
+                  min="1"
+                  value={item.quantity}
+                  onChange={(event) => onChange(item.localId, 'quantity', event.target.value)}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white"
+                  placeholder="Qty"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={item.unit_price_usd}
+                  onChange={(event) => onChange(item.localId, 'unit_price_usd', event.target.value)}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white"
+                  placeholder="Unit $"
+                />
+                <WarehouseSelect value={item.source_warehouse_id} warehouses={warehouses} onChange={(value) => onChange(item.localId, 'source_warehouse_id', value)} compactLabel="Source WH" compact />
+                <WarehouseSelect value={item.destination_warehouse_id} warehouses={warehouses} onChange={(value) => onChange(item.localId, 'destination_warehouse_id', value)} compactLabel="Dest WH" compact />
+                <input
+                  value={item.notes}
+                  onChange={(event) => onChange(item.localId, 'notes', event.target.value)}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white"
+                  placeholder="Notes"
+                />
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center justify-between rounded-apple border border-gray-200 bg-gray-50 px-4 py-3 dark:border-white/[0.06] dark:bg-surface-card-alt">
+            <div className="text-caption text-gray-500 dark:text-gray-400">
+              <span className="font-medium text-gray-900 dark:text-white">{items.length}</span> item{items.length !== 1 ? 's' : ''} -{' '}
+              <span className="font-medium text-gray-900 dark:text-white">
+                {items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)}
+              </span>{' '}
+              total qty
+            </div>
+            <span className="text-lg font-bold text-gray-900 dark:text-white">
+              {formatCurrency(items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_price_usd || 0), 0))}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <Cpu className="mb-2 h-8 w-8 text-gray-300 dark:text-gray-600" />
+          <p className="text-caption text-gray-400 dark:text-gray-500">No items yet</p>
+          <p className="mt-1 text-micro text-gray-400 dark:text-gray-500">Use "From Inventory" to pick devices or "Manual" to add items</p>
+        </div>
+      )}
+    </>
   );
 }
 
 function LogisticsFields({
   form,
+  itemCount,
+  itemsMode,
+  markets,
+  parts,
   warehouses,
   projects,
   poFile,
+  poFileRef,
+  quantity,
   totalValue,
   onFormChange,
   onFileChange,
 }: {
   form: AddForm;
+  itemCount: number;
+  itemsMode: 'simple' | 'multi';
+  markets: MarketOption[];
+  parts: TransactionPartOption[];
   warehouses: WarehouseOption[];
   projects: ProjectOption[];
   poFile: File | null;
+  poFileRef: React.RefObject<HTMLInputElement | null>;
+  quantity: number;
   totalValue: number;
   onFormChange: Dispatch<SetStateAction<AddForm>>;
   onFileChange: (file: File | null) => void;
@@ -1687,39 +2089,104 @@ function LogisticsFields({
   };
 
   return (
-    <div className="grid gap-5 md:grid-cols-2">
-      <Field label="Source Warehouse">
-        <WarehouseSelect value={form.source_warehouse_id} warehouses={warehouses} onChange={(value) => update('source_warehouse_id', value)} />
-      </Field>
-      <Field label="Destination Warehouse">
-        <WarehouseSelect value={form.destination_warehouse_id} warehouses={warehouses} onChange={(value) => update('destination_warehouse_id', value)} />
-      </Field>
-      <Field label="Project">
-        <ProjectSelect value={form.project_id} projects={projects} onChange={(value) => update('project_id', value)} />
-      </Field>
-      <Field label="PO Number">
-        <input value={form.po_number} onChange={(event) => update('po_number', event.target.value)} className="input-base" />
-      </Field>
-      <div className="md:col-span-2">
-        <Field label="PO Document">
-          <input
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-            onChange={(event) => onFileChange(event.target.files?.[0] || null)}
-            className="input-base"
-          />
-        </Field>
-      </div>
-      <div className="md:col-span-2 rounded-apple-lg border border-signal-teal/20 bg-signal-teal/5 p-4">
-        <div className="flex items-center justify-between">
-          <span className="text-caption font-medium text-gray-600 dark:text-gray-300">Transaction Value</span>
-          <span className="text-tile font-semibold text-signal-teal">{formatCurrency(totalValue)}</span>
+    <>
+      <div>
+        <h3 className="mb-3 flex items-center gap-2 text-caption font-semibold text-gray-700 dark:text-gray-300">
+          <Warehouse className="h-4 w-4" />
+          Warehouses
+        </h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Source</label>
+            <WarehouseSelect value={form.source_warehouse_id} warehouses={warehouses} onChange={(value) => update('source_warehouse_id', value)} compactLabel="None" />
+          </div>
+          <div>
+            <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Destination</label>
+            <WarehouseSelect value={form.destination_warehouse_id} warehouses={warehouses} onChange={(value) => update('destination_warehouse_id', value)} compactLabel="None" />
+          </div>
         </div>
-        {poFile && (
-          <div className="mt-2 text-micro text-gray-500 dark:text-gray-400">PO file: {poFile.name}</div>
-        )}
       </div>
-    </div>
+
+      <div>
+        <h3 className="mb-3 flex items-center gap-2 text-caption font-semibold text-gray-700 dark:text-gray-300">
+          <FolderKanban className="h-4 w-4" />
+          Project & Purchase Order
+        </h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Project</label>
+            <ProjectSelect value={form.project_id} projects={projects} onChange={(value) => update('project_id', value)} />
+          </div>
+          <div>
+            <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">PO Number</label>
+            <input
+              type="text"
+              value={form.po_number}
+              onChange={(event) => update('po_number', event.target.value)}
+              placeholder="e.g. PO-2026-001"
+              className="input-base rounded-apple"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">PO Document</label>
+        <div
+          onClick={() => poFileRef.current?.click()}
+          className="flex cursor-pointer items-center gap-3 rounded-apple border border-dashed border-gray-300 bg-white px-3 py-2.5 transition-colors hover:border-signal-teal/50 dark:border-white/10 dark:bg-surface-card"
+        >
+          <Upload className="h-4 w-4 text-gray-400" />
+          <span className="text-caption text-gray-500 dark:text-gray-400">
+            {poFile ? poFile.name : 'Click to upload PO (PDF, images, Word, Excel - max 10MB)'}
+          </span>
+          {poFile && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onFileChange(null);
+              }}
+              className="ml-auto"
+            >
+              <X className="h-4 w-4 text-gray-400 hover:text-red-500" />
+            </button>
+          )}
+        </div>
+        <input
+          ref={poFileRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onFileChange(file);
+          }}
+        />
+      </div>
+
+      <div className="border-t border-gray-200 pt-4 dark:border-white/[0.06]">
+        <h3 className="mb-3 text-caption font-semibold text-gray-700 dark:text-gray-300">Review</h3>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-caption">
+          <div className="text-gray-500 dark:text-gray-400">Type</div>
+          <div className="font-medium text-gray-900 dark:text-white">{form.movement_type}</div>
+          <div className="text-gray-500 dark:text-gray-400">Part</div>
+          <div className="font-medium text-gray-900 dark:text-white">{parts.find((part) => part.id === form.part_id)?.partNumber || form.part_number || '-'}</div>
+          <div className="text-gray-500 dark:text-gray-400">Market</div>
+          <div className="font-medium text-gray-900 dark:text-white">{markets.find((market) => market.id === form.market_id)?.marketName || '-'}</div>
+          {itemsMode === 'multi' && itemCount > 0 && (
+            <>
+              <div className="text-gray-500 dark:text-gray-400">Line Items</div>
+              <div className="font-medium text-gray-900 dark:text-white">{itemCount} item{itemCount !== 1 ? 's' : ''}</div>
+            </>
+          )}
+          <div className="text-gray-500 dark:text-gray-400">Total Qty</div>
+          <div className="font-medium text-gray-900 dark:text-white">{quantity || 0}</div>
+          <div className="text-gray-500 dark:text-gray-400">Total Value</div>
+          <div className="text-lg font-bold text-gray-900 dark:text-white">{formatCurrency(totalValue)}</div>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1743,10 +2210,6 @@ function PartSelector({
     [parts, value],
   );
   const [searchText, setSearchText] = useState(selectedPart?.partNumber || partNumber);
-
-  useEffect(() => {
-    setSearchText(selectedPart?.partNumber || partNumber);
-  }, [partNumber, selectedPart]);
 
   const filteredParts = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -1842,9 +2305,13 @@ function PartSelector({
   );
 }
 
-function ConditionSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function ConditionSelect({ value, compact = false, onChange }: { value: string; compact?: boolean; onChange: (value: string) => void }) {
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} className="input-base">
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className={compact ? 'w-full rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white' : 'input-base'}
+    >
       <option value="">Condition</option>
       {CONDITIONS.map((condition) => (
         <option key={condition.value} value={condition.value}>{condition.label}</option>
@@ -1857,15 +2324,21 @@ function WarehouseSelect({
   value,
   warehouses,
   compactLabel,
+  compact = false,
   onChange,
 }: {
   value: string;
   warehouses: WarehouseOption[];
   compactLabel?: string;
+  compact?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} className="input-base">
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className={compact ? 'w-full rounded border border-gray-200 bg-white px-2 py-1 text-micro text-gray-900 dark:border-white/10 dark:bg-surface-card dark:text-white' : 'input-base'}
+    >
       <option value="">{compactLabel || 'Select warehouse'}</option>
       {warehouses.map((warehouse) => (
         <option key={warehouse.id} value={warehouse.id}>
@@ -1889,16 +2362,16 @@ function ProjectSelect({ value, projects, onChange }: { value: string; projects:
 
 function MovementTypeSelector({ value, onChange }: { value: MovementType; onChange: (value: MovementType) => void }) {
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className="grid grid-cols-4 gap-2">
       {MOVEMENT_TYPES.map((type) => (
         <button
           key={type}
           type="button"
           onClick={() => onChange(type)}
-          className={`rounded-apple-md border px-4 py-3 text-caption font-semibold transition-colors ${
+          className={`rounded-apple border px-3 py-2 text-caption font-medium transition-colors ${
             value === type
-              ? 'border-signal-teal bg-signal-teal/10 text-signal-teal'
-              : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-white/10 dark:bg-surface-card dark:text-gray-300'
+              ? 'border-signal-teal bg-signal-teal text-white'
+              : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/10 dark:bg-surface-card dark:text-gray-300 dark:hover:bg-surface-hover'
           }`}
         >
           {type}
@@ -1908,54 +2381,36 @@ function MovementTypeSelector({ value, onChange }: { value: MovementType; onChan
   );
 }
 
-function StepIndicator({ step, labels }: { step: number; labels: string[] }) {
+function StepIndicator({ step, labels, onStepClick }: { step: number; labels: string[]; onStepClick?: (step: number) => void }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-2">
       {labels.map((label, index) => (
         <Fragment key={label}>
-          <div className="flex items-center gap-2">
-            <div className={`flex h-7 w-7 items-center justify-center rounded-pill text-micro font-semibold ${
-              index < step
-                ? 'bg-verified-green text-white'
-                : index === step
-                  ? 'bg-signal-teal text-white'
-                  : 'bg-gray-100 text-gray-500 dark:bg-surface-card-alt'
-            }`}>
-              {index < step ? <Check className="h-3.5 w-3.5" /> : index + 1}
-            </div>
-            <span className={`text-caption font-medium ${index === step ? 'text-signal-teal' : 'text-gray-500 dark:text-gray-400'}`}>
-              {label}
-            </span>
-          </div>
-          {index < labels.length - 1 && <div className="h-px flex-1 bg-gray-200 dark:bg-white/10" />}
+          {index > 0 && <div className={`h-0.5 flex-1 rounded ${step > index ? 'bg-signal-teal' : 'bg-gray-200 dark:bg-white/10'}`} />}
+          <button
+            type="button"
+            onClick={() => onStepClick?.(index + 1)}
+            className={`flex items-center gap-2 rounded-apple px-3 py-1.5 text-micro font-medium transition-colors ${
+              step === index + 1
+                ? 'border border-signal-teal/20 bg-signal-teal/10 text-signal-teal'
+                : step > index + 1
+                  ? 'cursor-pointer bg-verified-green/10 text-verified-green'
+                  : 'text-gray-400 dark:text-gray-500'
+            }`}
+          >
+            {step > index + 1 ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                step === index + 1 ? 'bg-signal-teal text-white' : 'bg-gray-200 text-gray-400 dark:bg-white/10'
+              }`}>
+                {index + 1}
+              </span>
+            )}
+            <span className="hidden sm:inline">{label}</span>
+          </button>
         </Fragment>
       ))}
-    </div>
-  );
-}
-
-function ModalShell({
-  title,
-  widthClass,
-  children,
-  onClose,
-}: {
-  title: string;
-  widthClass: string;
-  children: ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal-panel ${widthClass}`} onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4 dark:border-white/[0.04]">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">{title}</h2>
-          <button onClick={onClose} className="btn-ghost p-1.5">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        {children}
-      </div>
     </div>
   );
 }
@@ -1991,25 +2446,48 @@ function DeleteTransactionModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  return (
-    <ModalShell title="Delete Transaction" onClose={onCancel} widthClass="max-w-md">
-      <div className="px-6 py-5">
-        <p className="text-caption text-gray-600 dark:text-gray-300">
-          Delete {transaction.movementType.toLowerCase()} transaction for{' '}
-          <span className="font-semibold text-gray-900 dark:text-white">{transaction.partNumber || 'unassigned part'}</span>?
-        </p>
-        <p className="mt-2 text-micro text-gray-500">This removes the transaction, line items, and PO file.</p>
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!deleting) onCancel(); }} />
+      <div className="relative flex w-full max-w-md flex-col rounded-apple-lg bg-white shadow-xl dark:bg-surface-card">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Delete Transaction?</h2>
+          <button
+            onClick={() => { if (!deleting) onCancel(); }}
+            className="rounded-apple p-1 hover:bg-gray-100 dark:hover:bg-surface-hover"
+            disabled={deleting}
+          >
+            <X className="h-5 w-5 text-gray-500" />
+          </button>
+        </div>
+        <div className="space-y-2 px-6 py-5 text-caption text-gray-700 dark:text-gray-300">
+          <p>This will permanently delete this transaction and all of its line items. This action cannot be undone.</p>
+          <div className="mt-3 space-y-1 rounded-apple bg-gray-50 p-3 text-micro dark:bg-surface-hover">
+            <div><span className="text-gray-500">Date:</span> <span className="font-medium">{transaction.date || '-'}</span></div>
+            <div><span className="text-gray-500">Type:</span> <span className="font-medium">{transaction.movementType || '-'}</span></div>
+            <div><span className="text-gray-500">Part:</span> <span className="font-medium">{transaction.partNumber || '-'}</span></div>
+            <div><span className="text-gray-500">Quantity:</span> <span className="font-medium">{transaction.quantity ?? '-'}</span></div>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-white/[0.04]">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-apple px-4 py-2 text-caption font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-60 dark:text-gray-300 dark:hover:bg-surface-hover"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="flex items-center gap-2 rounded-apple bg-red-600 px-5 py-2 text-caption font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+          >
+            {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+            {deleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
       </div>
-      <div className="flex justify-end gap-2 border-t border-gray-100 bg-gray-50/50 px-6 py-4 dark:border-white/[0.04] dark:bg-surface-card-alt">
-        <button onClick={onCancel} className="btn-secondary">Cancel</button>
-        <button
-          onClick={onConfirm}
-          disabled={deleting}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-red-700 disabled:pointer-events-none disabled:opacity-50"
-        >
-          {deleting ? 'Deleting...' : 'Delete'}
-        </button>
-      </div>
-    </ModalShell>
+    </div>,
+    document.body,
   );
 }
