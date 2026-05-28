@@ -1,6 +1,6 @@
 /**
  * Cirtell API — Cloudflare Workers + D1
- * Simplified single-tenant platform: carbon accounting, parts catalog, transactions
+ * Multi-tenant Cirtell API: carbon accounting, parts catalog, transactions, warehouse, admin
  */
 
 import { Hono } from 'hono';
@@ -9,6 +9,8 @@ import { partsRoutes } from './routes/parts';
 import { transactionsRoutes } from './routes/transactions';
 import { carbonRoutes } from './routes/carbon';
 import { dashboardRoutes } from './routes/dashboard';
+import { warehouseRoutes } from './routes/warehouse';
+import { adminRoutes } from './routes/admin';
 import type { User } from './middleware/auth';
 import { rateLimitMiddleware } from './middleware/rateLimit';
 
@@ -88,6 +90,8 @@ app.route('/api/auth', authRoutes);
 app.route('/api/parts', partsRoutes);
 app.route('/api/transactions', transactionsRoutes);
 app.route('/api/ghg', carbonRoutes);
+app.route('/api/warehouses', warehouseRoutes);
+app.route('/api/admin', adminRoutes);
 app.route('/api', dashboardRoutes);
 
 // 404

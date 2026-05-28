@@ -9,7 +9,9 @@ import {
   Warehouse,
   LogOut,
   Recycle,
+  Globe,
 } from 'lucide-react';
+import { TenantCompanySelector } from './TenantCompanySelector';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -17,6 +19,10 @@ const navItems = [
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/warehouse', label: 'Warehouse', icon: Warehouse },
   { to: '/carbon', label: 'Carbon', icon: Leaf },
+];
+
+const adminItems = [
+  { to: '/admin/tenants', label: 'Groups', icon: Globe },
 ];
 
 function UserAvatar({ name }: { name?: string }) {
@@ -36,6 +42,7 @@ function UserAvatar({ name }: { name?: string }) {
 export function Sidebar() {
   const { user } = useAuthStore();
   const { logout } = useGoogleSSO({ initialize: false });
+  const showAdmin = user?.role === 'Admin' || user?.is_super_admin === true;
 
   return (
     <aside className="w-[260px] bg-white border-r border-gray-200/80 flex flex-col">
@@ -51,6 +58,9 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
+        <div className="mb-4">
+          <TenantCompanySelector />
+        </div>
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
@@ -76,6 +86,34 @@ export function Sidebar() {
             )}
           </NavLink>
         ))}
+        {showAdmin && (
+          <div className="pt-4 mt-4 border-t border-gray-100 space-y-0.5">
+            {adminItems.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                className={({ isActive }) =>
+                  `group flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all duration-200 ${
+                    isActive
+                      ? 'bg-signal-teal/10 text-deep-teal shadow-sm shadow-signal-teal/5'
+                      : 'text-gray-500 hover:bg-black/[0.04] hover:text-gray-900'
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-200 ${
+                      isActive ? 'bg-signal-teal/15' : 'bg-gray-100 group-hover:bg-signal-teal/10'
+                    }`}>
+                      <Icon size={16} className={isActive ? 'text-signal-teal' : ''} />
+                    </div>
+                    {label}
+                  </>
+                )}
+              </NavLink>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* User info */}

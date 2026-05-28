@@ -1,5 +1,5 @@
 /**
- * Parts Catalog Routes — single tenant
+ * Parts Catalog Routes - tenant/company scoped master catalog
  * CRUD for master parts catalog
  */
 
@@ -7,16 +7,18 @@ import { Hono } from 'hono';
 import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
+import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 
 export const partsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
 partsRoutes.use('*', authMiddleware);
 
 // ============================================================================
-// GET /api/parts — list all parts
+// GET /api/parts - list all parts
 // ============================================================================
 partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
     const search = c.req.query('search')?.trim();
     const category = c.req.query('category');
     const vendor = c.req.query('vendor');
@@ -24,15 +26,17 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
     const offset = parseInt(c.req.query('offset') || '0');
 
     const params: any[] = [];
-    let where = 'WHERE 1=1';
+    const conditions: string[] = [];
+    appendScopeCondition(conditions, params, scope, 'p.tenant_id', 'p.company_id');
 
     if (search) {
-      where += ' AND (p.part_number LIKE ? OR p.model_name LIKE ? OR v.vendor_name LIKE ?)';
+      conditions.push('(p.part_number LIKE ? OR p.model_name LIKE ? OR v.vendor_name LIKE ?)');
       const s = `%${search}%`;
       params.push(s, s, s);
     }
-    if (category) { where += ' AND p.category = ?'; params.push(category); }
-    if (vendor) { where += ' AND v.vendor_name = ?'; params.push(vendor); }
+    if (category) { conditions.push('p.category = ?'); params.push(category); }
+    if (vendor) { conditions.push('v.vendor_name = ?'); params.push(vendor); }
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const countResult = await c.env.DB.prepare(
       `SELECT COUNT(*) as total FROM parts p LEFT JOIN vendors v ON p.vendor_id = v.id ${where}`,
@@ -46,9 +50,14 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
         p.manufacture_start_year, p.manufacture_end_year,
         p.category, p.subcategory, p.description,
         p.needs_review, p.review_notes,
+        p.tenant_id, p.company_id,
+        t.name as tenant_name,
+        c.name as company_name,
         p.created_at, p.updated_at
       FROM parts p
       LEFT JOIN vendors v ON p.vendor_id = v.id
+      LEFT JOIN tenants t ON t.id = p.tenant_id
+      LEFT JOIN companies c ON c.id = p.company_id
       ${where}
       ORDER BY p.part_number ASC
       LIMIT ? OFFSET ?
@@ -62,16 +71,23 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
 });
 
 // ============================================================================
-// GET /api/parts/:id — single part
+// GET /api/parts/:id - single part
 // ============================================================================
 partsRoutes.get('/:id', requirePermission(Permission.VIEW_PARTS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'p.tenant_id', 'p.company_id');
     const id = c.req.param('id');
     const part = await c.env.DB.prepare(`
-      SELECT p.*, COALESCE(v.vendor_name, p.vendor_id) as vendor
-      FROM parts p LEFT JOIN vendors v ON p.vendor_id = v.id
-      WHERE p.id = ?
-    `).bind(id).first();
+      SELECT p.*, COALESCE(v.vendor_name, p.vendor_id) as vendor,
+             t.name as tenant_name,
+             c.name as company_name
+      FROM parts p
+      LEFT JOIN vendors v ON p.vendor_id = v.id
+      LEFT JOIN tenants t ON t.id = p.tenant_id
+      LEFT JOIN companies c ON c.id = p.company_id
+      WHERE p.id = ? AND ${scopeWhere.clause}
+    `).bind(id, ...scopeWhere.params).first();
 
     if (!part) return c.json({ success: false, error: 'Part not found' }, 404);
     return c.json({ success: true, part });
@@ -82,11 +98,13 @@ partsRoutes.get('/:id', requirePermission(Permission.VIEW_PARTS), async (c) => {
 });
 
 // ============================================================================
-// POST /api/parts — create a part
+// POST /api/parts - create a part
 // ============================================================================
 partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
   try {
     const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeValues = scopeInsertValues(scope, user);
     const body = await c.req.json();
 
     if (!body.part_number || typeof body.part_number !== 'string' || !body.part_number.trim()) {
@@ -95,8 +113,8 @@ partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
 
     // Check duplicate
     const existing = await c.env.DB.prepare(
-      'SELECT id FROM parts WHERE part_number = ?',
-    ).bind(body.part_number.trim()).first();
+      'SELECT id FROM parts WHERE part_number = ? AND tenant_id = ?',
+    ).bind(body.part_number.trim(), scopeValues.tenantId).first();
     if (existing) {
       return c.json({ success: false, error: 'Part number already exists' }, 409);
     }
@@ -119,14 +137,14 @@ partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
 
     await c.env.DB.prepare(`
       INSERT INTO parts (
-        id, part_number, manufacturer_part_number, model_name, vendor_id,
+        id, tenant_id, company_id, part_number, manufacturer_part_number, model_name, vendor_id,
         technology_type, weight_kg, emission_factor_kg,
         manufacture_start_year, manufacture_end_year,
         category, subcategory, description,
         needs_review, review_notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      id, body.part_number.trim(),
+      id, scopeValues.tenantId, scopeValues.companyId, body.part_number.trim(),
       body.manufacturer_part_number?.trim() || null,
       body.model_name?.trim() || null,
       vendorId,
@@ -152,15 +170,19 @@ partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
 });
 
 // ============================================================================
-// PUT /api/parts/:id — update a part
+// PUT /api/parts/:id - update a part
 // ============================================================================
 partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
   try {
     const user = c.get('user');
-    const id = c.req.param('id');
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const id = c.req.param('id')!;
     const body = await c.req.json();
 
-    const existing = await c.env.DB.prepare('SELECT id FROM parts WHERE id = ?').bind(id).first();
+    const existing = await c.env.DB.prepare(`SELECT id FROM parts WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .first();
     if (!existing) return c.json({ success: false, error: 'Part not found' }, 404);
 
     const sets: string[] = [];
@@ -221,11 +243,17 @@ partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
 partsRoutes.delete('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
   try {
     const user = c.get('user');
-    const id = c.req.param('id');
-    const existing = await c.env.DB.prepare('SELECT id FROM parts WHERE id = ?').bind(id).first();
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const id = c.req.param('id')!;
+    const existing = await c.env.DB.prepare(`SELECT id FROM parts WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .first();
     if (!existing) return c.json({ success: false, error: 'Part not found' }, 404);
 
-    await c.env.DB.prepare('DELETE FROM parts WHERE id = ?').bind(id).run();
+    await c.env.DB.prepare(`DELETE FROM parts WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .run();
     await logAudit(c.env.DB, user.id, 'DELETE_PART', 'parts', id);
     return c.json({ success: true });
   } catch (err: any) {
@@ -235,13 +263,19 @@ partsRoutes.delete('/:id', requirePermission(Permission.EDIT_PARTS), async (c) =
 });
 
 // ============================================================================
-// GET /api/parts/vendors — list distinct vendors
+// GET /api/parts/vendors - list distinct vendors
 // ============================================================================
 partsRoutes.get('/vendors/list', requirePermission(Permission.VIEW_PARTS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'p.tenant_id', 'p.company_id');
     const { results } = await c.env.DB.prepare(
-      'SELECT id, vendor_name FROM vendors ORDER BY vendor_name',
-    ).all();
+      `SELECT DISTINCT v.id, v.vendor_name
+       FROM vendors v
+       JOIN parts p ON p.vendor_id = v.id
+       WHERE ${scopeWhere.clause}
+       ORDER BY v.vendor_name`,
+    ).bind(...scopeWhere.params).all();
     return c.json({ success: true, vendors: results || [] });
   } catch (err: any) {
     return c.json({ success: false, error: 'Failed to fetch vendors' }, 500);

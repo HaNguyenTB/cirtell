@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { setToken, clearToken } from '../lib/authToken';
 import { apiRequest } from '../lib/api';
-import { useAuthStore, type AuthUser } from '../stores/authStore';
+import { useAuthStore, type AuthContextPayload, type AuthUser } from '../stores/authStore';
 
 interface GoogleCredentialResponse {
   credential: string;
@@ -63,12 +63,17 @@ export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
       setError(null);
       try {
         setToken(response.credential);
-        const result = await apiRequest<{ success: boolean; user: AuthUser; message?: string; error?: string }>(
+        const result = await apiRequest<{
+          success: boolean;
+          user: AuthUser;
+          message?: string;
+          error?: string;
+        } & AuthContextPayload>(
           '/api/auth/validate',
           { method: 'POST', redirectOnUnauthorized: false },
         );
         if (result.success && result.user) {
-          setUser(result.user);
+          setUser(result.user, result);
         } else {
           setError(result.message || result.error || 'Login failed');
           clearToken();

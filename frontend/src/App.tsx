@@ -7,6 +7,7 @@ import { PartsPage } from './pages/PartsPage';
 import { TransactionsPage } from './pages/TransactionsPage';
 import { CarbonPage } from './pages/CarbonPage';
 import { WarehousePage } from './pages/WarehousePage';
+import { AdminTenantsPage } from './pages/AdminTenantsPage';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/transactions" element={<TransactionsPage />} />
           <Route path="/carbon" element={<CarbonPage />} />
           <Route path="/warehouse" element={<WarehousePage />} />
+          <Route path="/admin/tenants" element={<AdminTenantsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>

@@ -1,4 +1,5 @@
 import { getToken, clearToken } from './authToken';
+import { useAuthStore } from '../stores/authStore';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 
@@ -17,11 +18,24 @@ interface ErrorResponse {
 export async function apiRequest<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, params, redirectOnUnauthorized = true } = opts;
   const token = getToken();
+  const authState = useAuthStore.getState();
 
   let url = `${API_URL}${path}`;
-  if (params) {
+  const scopedParams: Record<string, string | number | undefined> = { ...(params || {}) };
+  const shouldAttachScope = path.startsWith('/api/')
+    && !path.startsWith('/api/auth')
+    && !path.startsWith('/api/admin');
+  if (shouldAttachScope) {
+    if (authState.currentCompanyId && authState.currentCompanyId !== '__ALL__') {
+      scopedParams.company_id ??= authState.currentCompanyId;
+    } else if (authState.selectedTenantId) {
+      scopedParams.tenant_id ??= authState.selectedTenantId;
+    }
+  }
+
+  if (Object.keys(scopedParams).length > 0) {
     const searchParams = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
+    for (const [key, value] of Object.entries(scopedParams)) {
       if (value !== undefined && value !== '') {
         searchParams.set(key, String(value));
       }

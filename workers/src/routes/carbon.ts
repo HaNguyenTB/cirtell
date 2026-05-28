@@ -1,5 +1,5 @@
 /**
- * GHG Carbon Accounting Routes — single tenant
+ * GHG Carbon Accounting Routes - tenant/company scoped
  * Manual emission entry by Scope 1/2/3 with Scope 3 upstream/downstream categories
  */
 
@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import type { Env } from '../index';
 import { authMiddleware, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
+import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 
 type Variables = { user: User };
 
@@ -45,29 +46,31 @@ carbonRoutes.get('/categories', (c) => {
 // ============================================================================
 carbonRoutes.get('/entries', requirePermission(Permission.VIEW_CARBON), async (c) => {
   try {
+    const scopeContext = await resolveTenantScope(c);
     const scope = c.req.query('scope');
     const stream = c.req.query('stream');
     const periodStart = c.req.query('period_start');
     const periodEnd = c.req.query('period_end');
 
     const params: any[] = [];
-    let where = 'WHERE 1=1';
+    const conditions: string[] = [];
+    appendScopeCondition(conditions, params, scopeContext, 'e.tenant_id', 'e.company_id');
 
     if (scope) {
       const s = parseInt(scope);
-      if (s >= 1 && s <= 3) { where += ' AND e.scope = ?'; params.push(s); }
+      if (s >= 1 && s <= 3) { conditions.push('e.scope = ?'); params.push(s); }
     }
     if (stream === 'upstream' || stream === 'downstream') {
-      where += ' AND e.scope3_stream = ?'; params.push(stream);
+      conditions.push('e.scope3_stream = ?'); params.push(stream);
     }
-    if (periodStart) { where += ' AND e.reporting_period_end >= ?'; params.push(periodStart); }
-    if (periodEnd) { where += ' AND e.reporting_period_start <= ?'; params.push(periodEnd); }
+    if (periodStart) { conditions.push('e.reporting_period_end >= ?'); params.push(periodStart); }
+    if (periodEnd) { conditions.push('e.reporting_period_start <= ?'); params.push(periodEnd); }
 
     const { results } = await c.env.DB.prepare(`
       SELECT e.*, u.name as created_by_name
       FROM ghg_emission_entries e
       LEFT JOIN users u ON u.id = e.created_by
-      ${where}
+      WHERE ${conditions.join(' AND ')}
       ORDER BY e.scope, e.category_id, e.reporting_period_start DESC
     `).bind(...params).all();
 
@@ -84,6 +87,8 @@ carbonRoutes.get('/entries', requirePermission(Permission.VIEW_CARBON), async (c
 carbonRoutes.post('/entries', requirePermission(Permission.EDIT_CARBON), async (c) => {
   try {
     const user = c.get('user');
+    const scopeContext = await resolveTenantScope(c);
+    const scopeValues = scopeInsertValues(scopeContext, user);
     const body = await c.req.json();
 
     const {
@@ -121,14 +126,14 @@ carbonRoutes.post('/entries', requirePermission(Permission.EDIT_CARBON), async (
 
     await c.env.DB.prepare(`
       INSERT INTO ghg_emission_entries (
-        id, created_by, scope, category_id, scope3_stream,
+        id, tenant_id, company_id, created_by, scope, category_id, scope3_stream,
         source_description, activity_data, activity_unit,
         emission_factor, emission_factor_unit, emission_factor_source,
         co2e_kg, reporting_period_start, reporting_period_end,
         data_quality, methodology_notes
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      id, user.id, scopeNum, catId, stream,
+      id, scopeValues.tenantId, scopeValues.companyId, user.id, scopeNum, catId, stream,
       source_description, activityVal, activity_unit,
       efVal, emission_factor_unit || 'kgCO2e', emission_factor_source || null,
       co2eKg, reporting_period_start, reporting_period_end,
@@ -147,11 +152,17 @@ carbonRoutes.post('/entries', requirePermission(Permission.EDIT_CARBON), async (
 // ============================================================================
 carbonRoutes.delete('/entries/:id', requirePermission(Permission.EDIT_CARBON), async (c) => {
   try {
+    const scopeContext = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scopeContext, 'tenant_id', 'company_id');
     const id = c.req.param('id');
-    const existing = await c.env.DB.prepare('SELECT id FROM ghg_emission_entries WHERE id = ?').bind(id).first();
+    const existing = await c.env.DB.prepare(`SELECT id FROM ghg_emission_entries WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .first();
     if (!existing) return c.json({ error: 'Entry not found' }, 404);
 
-    await c.env.DB.prepare('DELETE FROM ghg_emission_entries WHERE id = ?').bind(id).run();
+    await c.env.DB.prepare(`DELETE FROM ghg_emission_entries WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .run();
     return c.json({ success: true });
   } catch (err: any) {
     console.error('DELETE /ghg/entries/:id error:', err);
@@ -160,17 +171,20 @@ carbonRoutes.delete('/entries/:id', requirePermission(Permission.EDIT_CARBON), a
 });
 
 // ============================================================================
-// GET /api/ghg/report — aggregated report
+// GET /api/ghg/report - aggregated report
 // ============================================================================
 carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c) => {
   try {
+    const scopeContext = await resolveTenantScope(c);
     const periodStart = c.req.query('period_start');
     const periodEnd = c.req.query('period_end');
 
     const params: any[] = [];
-    let where = 'WHERE 1=1';
-    if (periodStart) { where += ' AND reporting_period_end >= ?'; params.push(periodStart); }
-    if (periodEnd) { where += ' AND reporting_period_start <= ?'; params.push(periodEnd); }
+    const conditions: string[] = [];
+    appendScopeCondition(conditions, params, scopeContext, 'tenant_id', 'company_id');
+    if (periodStart) { conditions.push('reporting_period_end >= ?'); params.push(periodStart); }
+    if (periodEnd) { conditions.push('reporting_period_start <= ?'); params.push(periodEnd); }
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const { results } = await c.env.DB.prepare(`
       SELECT

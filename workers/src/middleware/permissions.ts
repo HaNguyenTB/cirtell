@@ -1,5 +1,5 @@
 /**
- * Simple role-based permissions — single tenant
+ * Role-based permissions for tenant-scoped Cirtell routes.
  * Roles: Admin, User, Viewer
  */
 
@@ -16,6 +16,8 @@ export enum Permission {
   DELETE_TRANSACTIONS = 'delete_transactions',
   VIEW_CARBON = 'view_carbon',
   EDIT_CARBON = 'edit_carbon',
+  VIEW_WAREHOUSE = 'view_warehouse',
+  EDIT_WAREHOUSE = 'edit_warehouse',
   MANAGE_USERS = 'manage_users',
   EXPORT_DATA = 'export_data',
 }
@@ -30,6 +32,8 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
     Permission.EDIT_TRANSACTIONS,
     Permission.VIEW_CARBON,
     Permission.EDIT_CARBON,
+    Permission.VIEW_WAREHOUSE,
+    Permission.EDIT_WAREHOUSE,
     Permission.EXPORT_DATA,
   ],
   Viewer: [
@@ -37,6 +41,7 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
     Permission.VIEW_PARTS,
     Permission.VIEW_TRANSACTIONS,
     Permission.VIEW_CARBON,
+    Permission.VIEW_WAREHOUSE,
   ],
 };
 

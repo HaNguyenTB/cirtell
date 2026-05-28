@@ -1,11 +1,12 @@
 /**
- * Dashboard — headline KPIs (single tenant, no company filter needed)
+ * Dashboard - headline KPIs scoped by tenant/company.
  */
 
 import { Hono } from 'hono';
 import type { Env } from '../index';
 import { authMiddleware, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
+import { resolveTenantScope, scopedWhere } from '../middleware/tenantScope';
 
 type Variables = { user: User };
 
@@ -14,10 +15,15 @@ export const dashboardRoutes = new Hono<{ Bindings: Env; Variables: Variables }>
 dashboardRoutes.use('*', authMiddleware);
 
 // ============================================================================
-// GET /api/overview/headline — top-level KPIs
+// GET /api/overview/headline - top-level KPIs
 // ============================================================================
 dashboardRoutes.get('/overview/headline', requirePermission(Permission.VIEW_DASHBOARD), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const transactionScope = scopedWhere(scope, 'tenant_id', 'company_id');
+    const ghgScope = scopedWhere(scope, 'tenant_id', 'company_id');
+    const partsScope = scopedWhere(scope, 'tenant_id', 'company_id');
+
     const txStats = await c.env.DB.prepare(`
       SELECT
         COUNT(*) as total_transactions,
@@ -25,7 +31,8 @@ dashboardRoutes.get('/overview/headline', requirePermission(Permission.VIEW_DASH
         SUM(quantity) as total_units,
         SUM(CASE WHEN movement_type = 'Redeploy' THEN quantity ELSE 0 END) as reuse_units
       FROM transactions
-    `).first();
+      WHERE ${transactionScope.clause}
+    `).bind(...transactionScope.params).first();
 
     const ghgTotals = await c.env.DB.prepare(`
       SELECT
@@ -34,9 +41,12 @@ dashboardRoutes.get('/overview/headline', requirePermission(Permission.VIEW_DASH
         SUM(CASE WHEN scope = 3 THEN co2e_kg ELSE 0 END) as scope3_kg,
         SUM(co2e_kg) as total_co2e_kg
       FROM ghg_emission_entries
-    `).first();
+      WHERE ${ghgScope.clause}
+    `).bind(...ghgScope.params).first();
 
-    const partsCount = await c.env.DB.prepare('SELECT COUNT(*) as total FROM parts').first<{ total: number }>();
+    const partsCount = await c.env.DB.prepare(`SELECT COUNT(*) as total FROM parts WHERE ${partsScope.clause}`)
+      .bind(...partsScope.params)
+      .first<{ total: number }>();
 
     const totalUnits = (txStats as any)?.total_units || 0;
     const reuseUnits = (txStats as any)?.reuse_units || 0;

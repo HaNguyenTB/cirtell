@@ -1,12 +1,13 @@
 /**
  * Transactions routes - Cirveris-style transaction workspace for Cirtell.
- * Single-tenant, with enriched reference data and optional line items.
+ * Tenant/company scoped, with enriched reference data and optional line items.
  */
 
 import { Hono } from 'hono';
 import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
+import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 
 type Variables = { user: User };
 type SQLValue = string | number | null;
@@ -22,6 +23,11 @@ interface PreparedLineItem {
   sourceWarehouseId: string | null;
   destinationWarehouseId: string | null;
   notes: string | null;
+}
+
+interface ScopeValues {
+  tenantId: string | null;
+  companyId: string | null;
 }
 
 interface UploadedFile {
@@ -111,10 +117,25 @@ async function findOrCreateVendor(db: D1Database, vendorName: unknown): Promise<
   return id;
 }
 
-async function resolvePart(db: D1Database, input: IncomingBody, fallbackVendor: unknown): Promise<string | null> {
+function ownershipClause(values: ScopeValues, alias = ''): { clause: string; params: SQLValue[] } {
+  const prefix = alias ? `${alias}.` : '';
+  if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
+  if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
+  return { clause: '1=1', params: [] };
+}
+
+async function resolvePart(
+  db: D1Database,
+  input: IncomingBody,
+  fallbackVendor: unknown,
+  ownership: ScopeValues,
+): Promise<string | null> {
+  const ownerWhere = ownershipClause(ownership);
   const explicitPartId = normalizeText(firstDefined(input, ['part_id', 'partId']));
   if (explicitPartId) {
-    const part = await db.prepare('SELECT id FROM parts WHERE id = ?').bind(explicitPartId).first<{ id: string }>();
+    const part = await db.prepare(`SELECT id FROM parts WHERE id = ? AND ${ownerWhere.clause}`)
+      .bind(explicitPartId, ...ownerWhere.params)
+      .first<{ id: string }>();
     if (!part) throw new ValidationError('Part not found');
     return explicitPartId;
   }
@@ -123,8 +144,8 @@ async function resolvePart(db: D1Database, input: IncomingBody, fallbackVendor: 
   if (!partNumber) return null;
 
   const existing = await db.prepare(
-    'SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?)',
-  ).bind(partNumber).first<{ id: string }>();
+    `SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?) AND ${ownerWhere.clause}`,
+  ).bind(partNumber, ...ownerWhere.params).first<{ id: string }>();
   if (existing) return existing.id;
 
   const vendorId = await findOrCreateVendor(db, firstDefined(input, ['vendor', 'companyName']) ?? fallbackVendor);
@@ -136,11 +157,13 @@ async function resolvePart(db: D1Database, input: IncomingBody, fallbackVendor: 
 
   await db.prepare(`
     INSERT INTO parts (
-      id, part_number, model_name, vendor_id, technology_type, category,
-      needs_review, review_notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        id, tenant_id, company_id, part_number, model_name, vendor_id, technology_type, category,
+        needs_review, review_notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
   `).bind(
     id,
+    ownership.tenantId,
+    ownership.companyId,
     partNumber,
     partName,
     vendorId,
@@ -154,34 +177,43 @@ async function resolvePart(db: D1Database, input: IncomingBody, fallbackVendor: 
   return id;
 }
 
-async function validateWarehouse(db: D1Database, value: unknown, label: string): Promise<string | null> {
+async function validateWarehouse(db: D1Database, value: unknown, label: string, ownership: ScopeValues): Promise<string | null> {
   const id = normalizeText(value);
   if (!id) return null;
-  const row = await db.prepare('SELECT id FROM warehouses WHERE id = ?').bind(id).first<{ id: string }>();
+  const ownerWhere = ownershipClause(ownership);
+  const row = await db.prepare(`SELECT id FROM warehouses WHERE id = ? AND ${ownerWhere.clause}`)
+    .bind(id, ...ownerWhere.params)
+    .first<{ id: string }>();
   if (!row) throw new ValidationError(`${label} warehouse not found`);
   return id;
 }
 
-async function validateContact(db: D1Database, value: unknown): Promise<string | null> {
+async function validateContact(db: D1Database, value: unknown, ownership: ScopeValues): Promise<string | null> {
   const id = normalizeText(value);
   if (!id) return null;
-  const row = await db.prepare('SELECT id FROM contacts WHERE id = ?').bind(id).first<{ id: string }>();
+  const ownerWhere = ownershipClause(ownership);
+  const row = await db.prepare(`SELECT id FROM contacts WHERE id = ? AND ${ownerWhere.clause}`)
+    .bind(id, ...ownerWhere.params)
+    .first<{ id: string }>();
   if (!row) throw new ValidationError('Contact not found');
   return id;
 }
 
-async function validateMarket(db: D1Database, value: unknown, useDefault: boolean): Promise<string | null> {
+async function validateMarket(db: D1Database, value: unknown, useDefault: boolean, ownership: ScopeValues): Promise<string | null> {
+  const ownerWhere = ownershipClause(ownership);
   const id = normalizeText(value);
   if (id) {
-    const row = await db.prepare('SELECT id FROM markets WHERE id = ?').bind(id).first<{ id: string }>();
+    const row = await db.prepare(`SELECT id FROM markets WHERE id = ? AND ${ownerWhere.clause}`)
+      .bind(id, ...ownerWhere.params)
+      .first<{ id: string }>();
     if (!row) throw new ValidationError('Market not found');
     return id;
   }
 
   if (!useDefault) return null;
   const fallback = await db.prepare(
-    "SELECT id FROM markets ORDER BY CASE WHEN id = 'global' THEN 0 ELSE 1 END, market_name LIMIT 1",
-  ).first<{ id: string }>();
+    `SELECT id FROM markets WHERE ${ownerWhere.clause} ORDER BY CASE WHEN id = 'global' THEN 0 ELSE 1 END, market_name LIMIT 1`,
+  ).bind(...ownerWhere.params).first<{ id: string }>();
   return fallback?.id || null;
 }
 
@@ -198,6 +230,7 @@ async function prepareLineItems(
   fallbackVendor: unknown,
   fallbackSourceWarehouseId: string | null,
   fallbackDestinationWarehouseId: string | null,
+  ownership: ScopeValues,
 ): Promise<PreparedLineItem[]> {
   const items = incomingItems(body);
   const prepared: PreparedLineItem[] = [];
@@ -214,15 +247,17 @@ async function prepareLineItems(
       db,
       firstDefined(item, ['source_warehouse_id', 'sourceWarehouseId']) ?? fallbackSourceWarehouseId,
       'Source',
+      ownership,
     );
     const destinationWarehouseId = await validateWarehouse(
       db,
       firstDefined(item, ['destination_warehouse_id', 'destinationWarehouseId']) ?? fallbackDestinationWarehouseId,
       'Destination',
+      ownership,
     );
 
     prepared.push({
-      partId: await resolvePart(db, item, fallbackVendor) || fallbackPartId,
+      partId: await resolvePart(db, item, fallbackVendor, ownership) || fallbackPartId,
       serialNumber: normalizeText(firstDefined(item, ['serial_number', 'serialNumber'])),
       condition: normalizeText(firstDefined(item, ['condition'])),
       quantity,
@@ -241,16 +276,19 @@ async function insertLineItems(
   transactionId: string,
   lineItems: PreparedLineItem[],
   now: string,
+  ownership: ScopeValues,
 ): Promise<void> {
   for (const item of lineItems) {
     await db.prepare(`
       INSERT INTO transaction_items (
-        id, transaction_id, part_id, serial_number, condition, quantity,
+        id, tenant_id, company_id, transaction_id, part_id, serial_number, condition, quantity,
         unit_price_usd, source_warehouse_id, destination_warehouse_id,
         notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       crypto.randomUUID(),
+      ownership.tenantId,
+      ownership.companyId,
       transactionId,
       item.partId,
       item.serialNumber,
@@ -324,11 +362,14 @@ const TRANSACTION_SELECT = `
 // ============================================================================
 transactionsRoutes.get('/markets', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const { results } = await c.env.DB.prepare(`
       SELECT id, market_name AS marketName, country, region
       FROM markets
+      WHERE ${scopeWhere.clause}
       ORDER BY CASE WHEN id = 'global' THEN 0 ELSE 1 END, market_name
-    `).all();
+    `).bind(...scopeWhere.params).all();
     return c.json({ success: true, markets: results || [] });
   } catch (err) {
     console.error('GET /transactions/markets error:', err);
@@ -338,12 +379,14 @@ transactionsRoutes.get('/markets', requirePermission(Permission.VIEW_TRANSACTION
 
 transactionsRoutes.get('/warehouses-list', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const { results } = await c.env.DB.prepare(`
       SELECT id, code, name, city, country, status
       FROM warehouses
-      WHERE status = 'active'
+      WHERE status = 'active' AND ${scopeWhere.clause}
       ORDER BY name
-    `).all();
+    `).bind(...scopeWhere.params).all();
     return c.json({ success: true, warehouses: results || [] });
   } catch (err) {
     console.error('GET /transactions/warehouses-list error:', err);
@@ -364,9 +407,11 @@ transactionsRoutes.get('/devices-available', requirePermission(Permission.VIEW_T
 // ============================================================================
 transactionsRoutes.get('/items/:transactionId', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const transactionId = c.req.param('transactionId');
-    const exists = await c.env.DB.prepare('SELECT id FROM transactions WHERE id = ?')
-      .bind(transactionId)
+    const exists = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(transactionId, ...scopeWhere.params)
       .first<{ id: string }>();
 
     if (!exists) return c.json({ success: false, error: 'Transaction not found' }, 404);
@@ -396,9 +441,9 @@ transactionsRoutes.get('/items/:transactionId', requirePermission(Permission.VIE
       LEFT JOIN parts p ON ti.part_id = p.id
       LEFT JOIN warehouses sw ON ti.source_warehouse_id = sw.id
       LEFT JOIN warehouses dw ON ti.destination_warehouse_id = dw.id
-      WHERE ti.transaction_id = ?
+      WHERE ti.transaction_id = ? AND ${scopeWhere.clause.replaceAll('tenant_id', 'ti.tenant_id').replaceAll('company_id', 'ti.company_id')}
       ORDER BY ti.created_at, ti.id
-    `).bind(transactionId).all();
+    `).bind(transactionId, ...scopeWhere.params).all();
 
     return c.json({ success: true, items: results || [] });
   } catch (err) {
@@ -412,6 +457,8 @@ transactionsRoutes.get('/items/:transactionId', requirePermission(Permission.VIE
 // ============================================================================
 transactionsRoutes.get('/summary', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const summary = await c.env.DB.prepare(`
       SELECT
         COUNT(*) AS total,
@@ -421,7 +468,8 @@ transactionsRoutes.get('/summary', requirePermission(Permission.VIEW_TRANSACTION
         SUM(CASE WHEN movement_type = 'Recycle' THEN 1 ELSE 0 END) AS recycles,
         SUM(quantity * unit_price_usd) AS totalValue
       FROM transactions
-    `).first<{
+      WHERE ${scopeWhere.clause}
+    `).bind(...scopeWhere.params).first<{
       total: number;
       purchases: number;
       sales: number;
@@ -452,6 +500,7 @@ transactionsRoutes.get('/summary', requirePermission(Permission.VIEW_TRANSACTION
 // ============================================================================
 transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
     const search = c.req.query('search')?.trim();
     const movementType = c.req.query('movement_type') || c.req.query('type');
     const startDate = c.req.query('start_date');
@@ -462,6 +511,7 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
 
     const params: SQLValue[] = [];
     const conditions: string[] = [];
+    appendScopeCondition(conditions, params, scope, 't.tenant_id', 't.company_id');
 
     if (movementType) {
       conditions.push('t.movement_type = ?');
@@ -494,7 +544,7 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
       params.push(term, term, term, term, term, term, term, term);
     }
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     const countResult = await c.env.DB.prepare(
       `SELECT COUNT(*) AS total ${TRANSACTION_FROM} ${whereClause}`,
@@ -527,8 +577,12 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
 transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
   try {
     const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const id = c.req.param('id')!;
-    const existing = await c.env.DB.prepare('SELECT id FROM transactions WHERE id = ?').bind(id).first<{ id: string }>();
+    const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .first<{ id: string }>();
     if (!existing) return c.json({ success: false, error: 'Transaction not found' }, 404);
 
     const formData = await c.req.formData();
@@ -576,12 +630,15 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
 // ============================================================================
 transactionsRoutes.get('/:id/po-download', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 't.tenant_id', 't.company_id');
     const id = c.req.param('id')!;
     const row = await c.env.DB.prepare(`
-      SELECT file_name AS fileName, content_type AS contentType, file_data AS fileData
-      FROM transaction_po_files
-      WHERE transaction_id = ?
-    `).bind(id).first<{ fileName: string; contentType: string; fileData: ArrayBuffer }>();
+      SELECT pf.file_name AS fileName, pf.content_type AS contentType, pf.file_data AS fileData
+      FROM transaction_po_files pf
+      JOIN transactions t ON t.id = pf.transaction_id
+      WHERE pf.transaction_id = ? AND ${scopeWhere.clause}
+    `).bind(id, ...scopeWhere.params).first<{ fileName: string; contentType: string; fileData: ArrayBuffer }>();
 
     if (!row) return c.json({ success: false, error: 'PO file not found' }, 404);
 
@@ -602,12 +659,14 @@ transactionsRoutes.get('/:id/po-download', requirePermission(Permission.VIEW_TRA
 // ============================================================================
 transactionsRoutes.get('/:id', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 't.tenant_id', 't.company_id');
     const id = c.req.param('id')!;
     const tx = await c.env.DB.prepare(`
       ${TRANSACTION_SELECT}
       ${TRANSACTION_FROM}
-      WHERE t.id = ?
-    `).bind(id).first();
+      WHERE t.id = ? AND ${scopeWhere.clause}
+    `).bind(id, ...scopeWhere.params).first();
 
     if (!tx) return c.json({ success: false, error: 'Transaction not found' }, 404);
     return c.json({ success: true, transaction: tx });
@@ -623,6 +682,8 @@ transactionsRoutes.get('/:id', requirePermission(Permission.VIEW_TRANSACTIONS), 
 transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
   try {
     const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const ownership = scopeInsertValues(scope, user);
     const body = await c.req.json<IncomingBody>();
 
     const date = normalizeText(firstDefined(body, ['date']));
@@ -634,15 +695,17 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       c.env.DB,
       firstDefined(body, ['source_warehouse_id', 'sourceWarehouseId']),
       'Source',
+      ownership,
     );
     const destinationWarehouseId = await validateWarehouse(
       c.env.DB,
       firstDefined(body, ['destination_warehouse_id', 'destinationWarehouseId']),
       'Destination',
+      ownership,
     );
-    const marketId = await validateMarket(c.env.DB, firstDefined(body, ['market_id', 'marketId']), true);
-    const contactId = await validateContact(c.env.DB, firstDefined(body, ['contact_id', 'contactId']));
-    let partId = await resolvePart(c.env.DB, body, vendor);
+    const marketId = await validateMarket(c.env.DB, firstDefined(body, ['market_id', 'marketId']), true, ownership);
+    const contactId = await validateContact(c.env.DB, firstDefined(body, ['contact_id', 'contactId']), ownership);
+    let partId = await resolvePart(c.env.DB, body, vendor, ownership);
     const lineItems = await prepareLineItems(
       c.env.DB,
       body,
@@ -650,6 +713,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       vendor,
       sourceWarehouseId,
       destinationWarehouseId,
+      ownership,
     );
     if (!partId && lineItems.length > 0) partId = lineItems[0].partId;
 
@@ -675,14 +739,16 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
 
     await c.env.DB.prepare(`
       INSERT INTO transactions (
-        id, date, movement_type, quantity, unit_price_usd,
+        id, tenant_id, company_id, date, movement_type, quantity, unit_price_usd,
         vendor, part_id, serial_number, condition,
         po_number, po_file_key, po_file_name,
         market_id, source_warehouse_id, destination_warehouse_id,
         project_id, contact_id, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
+      ownership.tenantId,
+      ownership.companyId,
       date,
       movementType,
       quantity,
@@ -704,7 +770,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       now,
     ).run();
 
-    await insertLineItems(c.env.DB, id, lineItems, now);
+    await insertLineItems(c.env.DB, id, lineItems, now, ownership);
     await logAudit(c.env.DB, user.id, 'CREATE_TRANSACTION', 'transactions', id);
 
     return c.json({ success: true, id }, 201);
@@ -723,14 +789,17 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
 transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
   try {
     const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const ownership = scopeInsertValues(scope, user);
     const id = c.req.param('id')!;
     const body = await c.req.json<IncomingBody>();
 
     const existing = await c.env.DB.prepare(`
       SELECT id, part_id, vendor, source_warehouse_id, destination_warehouse_id
       FROM transactions
-      WHERE id = ?
-    `).bind(id).first<{
+      WHERE id = ? AND ${scopeWhere.clause}
+    `).bind(id, ...scopeWhere.params).first<{
       id: string;
       part_id: string | null;
       vendor: string | null;
@@ -776,7 +845,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       firstDefined(body, ['part_id', 'partId', 'part_number', 'partNumber']) !== undefined;
     let currentPartId = existing.part_id;
     if (partWasProvided) {
-      currentPartId = await resolvePart(c.env.DB, body, firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor);
+      currentPartId = await resolvePart(c.env.DB, body, firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor, ownership);
       setColumn('part_id', currentPartId);
     }
 
@@ -796,24 +865,24 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     }
 
     const marketRaw = firstDefined(body, ['market_id', 'marketId']);
-    if (marketRaw !== undefined) setColumn('market_id', await validateMarket(c.env.DB, marketRaw, false));
+    if (marketRaw !== undefined) setColumn('market_id', await validateMarket(c.env.DB, marketRaw, false, ownership));
 
     const sourceWarehouseRaw = firstDefined(body, ['source_warehouse_id', 'sourceWarehouseId']);
     let sourceWarehouseId = existing.source_warehouse_id;
     if (sourceWarehouseRaw !== undefined) {
-      sourceWarehouseId = await validateWarehouse(c.env.DB, sourceWarehouseRaw, 'Source');
+      sourceWarehouseId = await validateWarehouse(c.env.DB, sourceWarehouseRaw, 'Source', ownership);
       setColumn('source_warehouse_id', sourceWarehouseId);
     }
 
     const destinationWarehouseRaw = firstDefined(body, ['destination_warehouse_id', 'destinationWarehouseId']);
     let destinationWarehouseId = existing.destination_warehouse_id;
     if (destinationWarehouseRaw !== undefined) {
-      destinationWarehouseId = await validateWarehouse(c.env.DB, destinationWarehouseRaw, 'Destination');
+      destinationWarehouseId = await validateWarehouse(c.env.DB, destinationWarehouseRaw, 'Destination', ownership);
       setColumn('destination_warehouse_id', destinationWarehouseId);
     }
 
     const contactRaw = firstDefined(body, ['contact_id', 'contactId']);
-    if (contactRaw !== undefined) setColumn('contact_id', await validateContact(c.env.DB, contactRaw));
+    if (contactRaw !== undefined) setColumn('contact_id', await validateContact(c.env.DB, contactRaw, ownership));
 
     const lineItems = await prepareLineItems(
       c.env.DB,
@@ -822,6 +891,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor,
       sourceWarehouseId,
       destinationWarehouseId,
+      ownership,
     );
     const shouldReplaceLineItems = incomingItems(body).length > 0;
 
@@ -840,15 +910,15 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
 
     if (sets.length > 0) {
       setColumn('updated_at', new Date().toISOString());
-      await c.env.DB.prepare(`UPDATE transactions SET ${sets.join(', ')} WHERE id = ?`)
-        .bind(...params, id)
+      await c.env.DB.prepare(`UPDATE transactions SET ${sets.join(', ')} WHERE id = ? AND ${scopeWhere.clause}`)
+        .bind(...params, id, ...scopeWhere.params)
         .run();
     }
 
     if (shouldReplaceLineItems) {
       const now = new Date().toISOString();
       await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
-      await insertLineItems(c.env.DB, id, lineItems, now);
+      await insertLineItems(c.env.DB, id, lineItems, now, ownership);
     }
 
     await logAudit(c.env.DB, user.id, 'UPDATE_TRANSACTION', 'transactions', id);
@@ -868,13 +938,19 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
 transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIONS), async (c) => {
   try {
     const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const id = c.req.param('id')!;
 
-    const existing = await c.env.DB.prepare('SELECT id FROM transactions WHERE id = ?').bind(id).first<{ id: string }>();
+    const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .first<{ id: string }>();
     if (!existing) return c.json({ success: false, error: 'Transaction not found' }, 404);
 
     await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
-    await c.env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(id).run();
+    await c.env.DB.prepare(`DELETE FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+      .bind(id, ...scopeWhere.params)
+      .run();
     await logAudit(c.env.DB, user.id, 'DELETE_TRANSACTION', 'transactions', id);
     return c.json({ success: true });
   } catch (err) {

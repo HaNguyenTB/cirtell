@@ -1,6 +1,6 @@
 /**
- * Authentication middleware — Google SSO with JWT verification
- * Single-tenant: user must exist in the users table to access the API.
+ * Authentication middleware - Google SSO with JWT verification.
+ * Multi-tenant: user must exist in the users table and carries tenant scope.
  */
 
 import { jwtVerify, createRemoteJWKSet, type JWTPayload } from 'jose';
@@ -21,6 +21,11 @@ export interface User {
   email: string;
   name: string;
   role: string;
+  tenant_id: string | null;
+  company_id: string | null;
+  tenant_name?: string | null;
+  company_name?: string | null;
+  is_super_admin?: boolean;
 }
 
 type Variables = { user: User };
@@ -37,7 +42,10 @@ function getGoogleJWKS(): ReturnType<typeof createRemoteJWKSet> {
 /**
  * Validate Google ID token cryptographically
  */
-export async function validateGoogleToken(token: string, env: Env): Promise<Omit<User, 'role'> | null> {
+export async function validateGoogleToken(
+  token: string,
+  env: Env,
+): Promise<Pick<User, 'id' | 'email' | 'name'> | null> {
   try {
     if (!token || typeof token !== 'string' || token.split('.').length !== 3) return null;
     if (!env.GOOGLE_CLIENT_ID) { console.error('GOOGLE_CLIENT_ID not set'); return null; }
@@ -62,7 +70,7 @@ export async function validateGoogleToken(token: string, env: Env): Promise<Omit
 }
 
 /**
- * Auth middleware — attaches user to context
+ * Auth middleware - attaches user to context
  */
 export async function authMiddleware(c: Context<{ Bindings: Env; Variables: Variables }>, next: Function) {
   const authHeader = c.req.header('Authorization');
@@ -77,8 +85,27 @@ export async function authMiddleware(c: Context<{ Bindings: Env; Variables: Vari
 
   // User must exist in DB
   const dbUser = await c.env.DB.prepare(
-    'SELECT id, email, name, role, status FROM users WHERE LOWER(email) = LOWER(?)',
-  ).bind(tokenUser.email).first<{ id: string; email: string; name: string; role: string; status: string }>();
+    `SELECT
+      u.id, u.email, u.name, u.role, u.status,
+      u.tenant_id, u.company_id, u.is_super_admin,
+      t.name AS tenant_name,
+      c.name AS company_name
+    FROM users u
+    LEFT JOIN tenants t ON t.id = u.tenant_id
+    LEFT JOIN companies c ON c.id = u.company_id
+    WHERE LOWER(u.email) = LOWER(?)`,
+  ).bind(tokenUser.email).first<{
+    id: string;
+    email: string;
+    name: string;
+    role: string;
+    status: string;
+    tenant_id: string | null;
+    company_id: string | null;
+    is_super_admin: number | null;
+    tenant_name: string | null;
+    company_name: string | null;
+  }>();
 
   if (!dbUser || dbUser.status === 'deleted') {
     return c.json({ error: 'Access Denied', message: 'Account not registered. Contact admin.' }, 403);
@@ -92,7 +119,17 @@ export async function authMiddleware(c: Context<{ Bindings: Env; Variables: Vari
   await c.env.DB.prepare('UPDATE users SET last_login = ? WHERE id = ?')
     .bind(new Date().toISOString(), dbUser.id).run();
 
-  c.set('user', { id: dbUser.id, email: dbUser.email, name: dbUser.name, role: dbUser.role });
+  c.set('user', {
+    id: dbUser.id,
+    email: dbUser.email,
+    name: dbUser.name,
+    role: dbUser.role,
+    tenant_id: dbUser.tenant_id,
+    company_id: dbUser.company_id,
+    tenant_name: dbUser.tenant_name,
+    company_name: dbUser.company_name,
+    is_super_admin: dbUser.is_super_admin === 1,
+  });
   await next();
 }
 
