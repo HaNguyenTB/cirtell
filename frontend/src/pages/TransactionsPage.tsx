@@ -379,6 +379,7 @@ async function uploadTransactionPO(transactionId: string, file: File): Promise<v
     method: 'POST',
     headers,
     body: formData,
+    credentials: 'include',
   });
 
   if (!response.ok) throw new Error(await readApiError(response));
@@ -389,7 +390,10 @@ async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
   const headers: HeadersInit = {};
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_URL}/api/transactions/${transaction.id}/po-download`, { headers });
+  const response = await fetch(`${API_URL}/api/transactions/${transaction.id}/po-download`, {
+    headers,
+    credentials: 'include',
+  });
   if (!response.ok) throw new Error(await readApiError(response));
 
   const blob = await response.blob();

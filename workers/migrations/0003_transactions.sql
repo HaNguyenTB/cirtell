@@ -1,4 +1,4 @@
--- Cirveris-style transaction enhancements for Cirtell.
+-- Transaction enhancements for Cirtell.
 -- Adds reference markets, buyer contacts, warehouse/project links, PO metadata,
 -- and transaction line items while keeping Cirtell single-tenant.
 

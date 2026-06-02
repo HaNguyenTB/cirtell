@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { setToken, clearToken } from '../lib/authToken';
+import { clearToken } from '../lib/authToken';
 import { apiRequest } from '../lib/api';
 import { useAuthStore, type AuthContextPayload, type AuthUser } from '../stores/authStore';
 
@@ -62,7 +62,6 @@ export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
     async (response: GoogleCredentialResponse) => {
       setError(null);
       try {
-        setToken(response.credential);
         const result = await apiRequest<{
           success: boolean;
           user: AuthUser;
@@ -70,9 +69,10 @@ export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
           error?: string;
         } & AuthContextPayload>(
           '/api/auth/validate',
-          { method: 'POST', redirectOnUnauthorized: false },
+          { method: 'POST', redirectOnUnauthorized: false, authToken: response.credential },
         );
         if (result.success && result.user) {
+          clearToken();
           setUser(result.user, result);
         } else {
           setError(result.message || result.error || 'Login failed');
@@ -163,6 +163,10 @@ export function useGoogleSSO(options: UseGoogleSSOOptions = {}) {
       window.google.accounts.id.disableAutoSelect();
       window.google.accounts.id.revoke(user.email, () => {});
     }
+    void apiRequest('/api/auth/logout', {
+      method: 'POST',
+      redirectOnUnauthorized: false,
+    }).catch(() => {});
     clearToken();
     storeLogout();
     initializedRef.current = false;

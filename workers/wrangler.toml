@@ -3,23 +3,34 @@ main = "src/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# D1 Database Binding
+# D1 Database Binding - main tenant-scoped database.
 [[d1_databases]]
 binding = "DB"
 database_name = "cirtell-db"
 database_id = "6de6d04b-4cb1-45e0-bc6d-857a843ac150"
 
+# R2 Storage Bucket for project evidence files.
+# Create bucket with: npx wrangler r2 bucket create cirtell-evidence
+[[r2_buckets]]
+binding = "EVIDENCE_BUCKET"
+bucket_name = "cirtell-evidence"
+
 # Environment Variables (non-sensitive)
 [vars]
-FRONTEND_URL = "http://localhost:5173"
+FRONTEND_URL = "https://cirtell.pages.dev"
+CORS_ALLOWED_ORIGINS = "https://cirtell.pages.dev"
 
 # Development environment
 [env.development]
-vars = { FRONTEND_URL = "http://localhost:5173" }
+vars = { FRONTEND_URL = "http://localhost:5173", CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174" }
 [[env.development.d1_databases]]
 binding = "DB"
 database_name = "cirtell-db"
 database_id = "00000000-0000-0000-0000-000000000000"
+
+[[env.development.r2_buckets]]
+binding = "EVIDENCE_BUCKET"
+bucket_name = "cirtell-evidence-dev"
 
 # Production environment — update FRONTEND_URL after deploying frontend
 # [env.production]

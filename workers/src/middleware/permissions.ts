@@ -18,6 +18,8 @@ export enum Permission {
   EDIT_CARBON = 'edit_carbon',
   VIEW_WAREHOUSE = 'view_warehouse',
   EDIT_WAREHOUSE = 'edit_warehouse',
+  VIEW_PROJECTS = 'view_projects',
+  MANAGE_PROJECTS = 'manage_projects',
   MANAGE_USERS = 'manage_users',
   EXPORT_DATA = 'export_data',
 }
@@ -34,6 +36,8 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
     Permission.EDIT_CARBON,
     Permission.VIEW_WAREHOUSE,
     Permission.EDIT_WAREHOUSE,
+    Permission.VIEW_PROJECTS,
+    Permission.MANAGE_PROJECTS,
     Permission.EXPORT_DATA,
   ],
   Viewer: [
@@ -42,11 +46,16 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
     Permission.VIEW_TRANSACTIONS,
     Permission.VIEW_CARBON,
     Permission.VIEW_WAREHOUSE,
+    Permission.VIEW_PROJECTS,
   ],
 };
 
 export function hasPermission(role: string, permission: Permission): boolean {
   return (ROLE_PERMISSIONS[role] || []).includes(permission);
+}
+
+export function hasUserPermission(user: User, permission: Permission): boolean {
+  return user.is_super_admin === true || hasPermission(user.role, permission);
 }
 
 /**
@@ -55,7 +64,7 @@ export function hasPermission(role: string, permission: Permission): boolean {
 export function requirePermission(permission: Permission) {
   return async (c: Context<{ Bindings: Env; Variables: { user: User } }>, next: any) => {
     const user = c.get('user');
-    if (!hasPermission(user.role, permission)) {
+    if (!hasUserPermission(user, permission)) {
       return c.json({ success: false, error: 'Insufficient permissions' }, 403);
     }
     await next();

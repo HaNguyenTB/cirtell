@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index';
 import { validateGoogleToken, authMiddleware, logAudit, type User } from '../middleware/auth';
+import { clearSessionCookie, createAppSessionToken, setSessionCookie } from '../services/auth/sessionCookie';
 
 type Variables = { user: User };
 
@@ -16,6 +17,8 @@ interface DbUser {
   name: string;
   role: string;
   status: string;
+  google_sub: string | null;
+  session_version: number | null;
   tenant_id: string | null;
   company_id: string | null;
   is_super_admin: number | null;
@@ -32,6 +35,7 @@ async function loadDbUser(db: D1Database, email: string): Promise<DbUser | null>
   return db.prepare(`
     SELECT
       u.id, u.email, u.name, u.role, u.status,
+      u.google_sub, u.session_version,
       u.tenant_id, u.company_id, u.is_super_admin,
       t.name AS tenant_name,
       t.domain AS tenant_domain,
@@ -44,6 +48,45 @@ async function loadDbUser(db: D1Database, email: string): Promise<DbUser | null>
     LEFT JOIN tenants t ON t.id = u.tenant_id
     LEFT JOIN companies c ON c.id = u.company_id
     WHERE LOWER(u.email) = LOWER(?)
+  `).bind(email).first<DbUser>();
+}
+
+async function loadDbUserForGoogle(db: D1Database, googleSub: string, email: string): Promise<DbUser | null> {
+  const byGoogleSub = await db.prepare(`
+    SELECT
+      u.id, u.email, u.name, u.role, u.status,
+      u.google_sub, u.session_version,
+      u.tenant_id, u.company_id, u.is_super_admin,
+      t.name AS tenant_name,
+      t.domain AS tenant_domain,
+      t.is_platform_tenant,
+      t.parent_tenant_id,
+      t.group_type,
+      c.name AS company_name,
+      c.code AS company_code
+    FROM users u
+    LEFT JOIN tenants t ON t.id = u.tenant_id
+    LEFT JOIN companies c ON c.id = u.company_id
+    WHERE u.google_sub = ?
+  `).bind(googleSub).first<DbUser>();
+  if (byGoogleSub) return byGoogleSub;
+
+  return db.prepare(`
+    SELECT
+      u.id, u.email, u.name, u.role, u.status,
+      u.google_sub, u.session_version,
+      u.tenant_id, u.company_id, u.is_super_admin,
+      t.name AS tenant_name,
+      t.domain AS tenant_domain,
+      t.is_platform_tenant,
+      t.parent_tenant_id,
+      t.group_type,
+      c.name AS company_name,
+      c.code AS company_code
+    FROM users u
+    LEFT JOIN tenants t ON t.id = u.tenant_id
+    LEFT JOIN companies c ON c.id = u.company_id
+    WHERE LOWER(u.email) = LOWER(?) AND u.google_sub IS NULL
   `).bind(email).first<DbUser>();
 }
 
@@ -136,7 +179,7 @@ authRoutes.post('/validate', async (c) => {
   }
 
   try {
-    const dbUser = await loadDbUser(c.env.DB, tokenUser.email);
+    const dbUser = await loadDbUserForGoogle(c.env.DB, tokenUser.id, tokenUser.email);
 
     if (!dbUser) {
       return c.json({
@@ -151,11 +194,21 @@ authRoutes.post('/validate', async (c) => {
     }
 
     // Update last login
-    await c.env.DB.prepare('UPDATE users SET last_login = ? WHERE id = ?')
-      .bind(new Date().toISOString(), dbUser.id).run();
+    await c.env.DB.prepare(`
+      UPDATE users
+      SET last_login = ?, google_sub = COALESCE(google_sub, ?)
+      WHERE id = ?
+    `).bind(new Date().toISOString(), tokenUser.id, dbUser.id).run();
 
     await logAudit(c.env.DB, dbUser.id, 'LOGIN', 'users', dbUser.id);
     const context = await loadTenantContext(c.env.DB, dbUser);
+    const sessionToken = await createAppSessionToken(c.env, {
+      userId: dbUser.id,
+      email: dbUser.email,
+      name: dbUser.name,
+      sessionVersion: dbUser.session_version ?? 0,
+    });
+    setSessionCookie(c, sessionToken);
 
     return c.json({
       success: true,
@@ -166,6 +219,11 @@ authRoutes.post('/validate', async (c) => {
     console.error('Auth validate error:', err);
     return c.json({ error: 'Internal Server Error' }, 500);
   }
+});
+
+authRoutes.post('/logout', async (c) => {
+  clearSessionCookie(c);
+  return c.json({ success: true });
 });
 
 /**

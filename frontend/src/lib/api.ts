@@ -1,13 +1,14 @@
 import { getToken, clearToken } from './authToken';
 import { useAuthStore } from '../stores/authStore';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
 
 interface RequestOptions {
   method?: string;
   body?: unknown;
   params?: Record<string, string | number | undefined>;
   redirectOnUnauthorized?: boolean;
+  authToken?: string | null;
 }
 
 interface ErrorResponse {
@@ -16,8 +17,8 @@ interface ErrorResponse {
 }
 
 export async function apiRequest<T = unknown>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, params, redirectOnUnauthorized = true } = opts;
-  const token = getToken();
+  const { method = 'GET', body, params, redirectOnUnauthorized = true, authToken } = opts;
+  const token = authToken ?? getToken();
   const authState = useAuthStore.getState();
 
   let url = `${API_URL}${path}`;
@@ -45,17 +46,19 @@ export async function apiRequest<T = unknown>(path: string, opts: RequestOptions
   }
 
   const headers: Record<string, string> = {};
+  const isFormData = body instanceof FormData;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  if (body) {
+  if (body && !isFormData) {
     headers['Content-Type'] = 'application/json';
   }
 
   const res = await fetch(url, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
+    credentials: 'include',
   });
 
   if (res.status === 401) {

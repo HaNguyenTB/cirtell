@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
 import {
@@ -20,6 +20,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Upload,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -72,6 +73,36 @@ interface PartForm {
   review_notes: string;
 }
 
+interface ImportPartPayload {
+  part_number?: string;
+  manufacturer_part_number?: string | null;
+  model_name?: string | null;
+  vendor?: string | null;
+  technology_type?: string | null;
+  weight_kg?: number | null;
+  emission_factor_kg?: number | null;
+  manufacture_start_year?: number | null;
+  manufacture_end_year?: number | null;
+  category?: string | null;
+  subcategory?: string | null;
+  description?: string | null;
+  needs_review?: boolean;
+  review_notes?: string | null;
+}
+
+interface ImportIssue {
+  row: number;
+  part_number?: string;
+  error: string;
+}
+
+interface ImportSummary {
+  created: number;
+  updated: number;
+  skipped: number;
+  total: number;
+}
+
 interface PartsFilters {
   vendor: string;
   technology: string;
@@ -115,6 +146,45 @@ const emptyForm: PartForm = {
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 const VENDOR_COLORS = ['#0E5A5A', '#25957B', '#3BCF9B', '#065F46'];
+const IMPORT_LIMIT = 1000;
+
+const IMPORT_HEADER_MAP: Record<string, keyof ImportPartPayload> = {
+  partnumber: 'part_number',
+  partno: 'part_number',
+  part: 'part_number',
+  sku: 'part_number',
+  itemnumber: 'part_number',
+  manufacturerpartnumber: 'manufacturer_part_number',
+  mfrpartnumber: 'manufacturer_part_number',
+  mfrpartno: 'manufacturer_part_number',
+  mpn: 'manufacturer_part_number',
+  modelname: 'model_name',
+  model: 'model_name',
+  partname: 'model_name',
+  name: 'model_name',
+  vendor: 'vendor',
+  manufacturer: 'vendor',
+  supplier: 'vendor',
+  technology: 'technology_type',
+  technologytype: 'technology_type',
+  weight: 'weight_kg',
+  weightkg: 'weight_kg',
+  emissionfactor: 'emission_factor_kg',
+  co2efactor: 'emission_factor_kg',
+  co2factor: 'emission_factor_kg',
+  carbonfactor: 'emission_factor_kg',
+  manufacturestartyear: 'manufacture_start_year',
+  startyear: 'manufacture_start_year',
+  manufactureendyear: 'manufacture_end_year',
+  endyear: 'manufacture_end_year',
+  category: 'category',
+  subcategory: 'subcategory',
+  description: 'description',
+  needsreview: 'needs_review',
+  review: 'needs_review',
+  reviewnotes: 'review_notes',
+  notes: 'review_notes',
+};
 
 function isTruthyReview(value: Part['needs_review']) {
   return value === true || value === 1;
@@ -152,6 +222,127 @@ function parseNumeric(value: string) {
   if (!trimmed) return null;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeImportHeader(value: unknown) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function isBlankImportCell(value: unknown) {
+  return value === null || value === undefined || String(value).trim() === '';
+}
+
+function importText(value: unknown, maxLength = 500): string | null {
+  if (isBlankImportCell(value)) return null;
+  const text = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function importNumber(value: unknown): number | null {
+  if (isBlankImportCell(value)) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function importInteger(value: unknown): number | null {
+  const parsed = importNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
+}
+
+function importBoolean(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || isBlankImportCell(value)) return false;
+  return ['1', 'true', 'yes', 'y', 'review', 'needs review'].includes(String(value).trim().toLowerCase());
+}
+
+function parseCsvRows(text: string): unknown[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      row.push(cell);
+      cell = '';
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
+}
+
+function parseImportRows(rows: unknown[][]): { parts: ImportPartPayload[]; issues: ImportIssue[] } {
+  const headerIndex = rows.findIndex((row) => row.some((cell) => !isBlankImportCell(cell)));
+  if (headerIndex === -1) {
+    return { parts: [], issues: [{ row: 1, error: 'The file is empty' }] };
+  }
+
+  const headers = rows[headerIndex].map((header) => IMPORT_HEADER_MAP[normalizeImportHeader(header)] || null);
+  if (!headers.includes('part_number')) {
+    return { parts: [], issues: [{ row: headerIndex + 1, error: 'A Part Number column is required' }] };
+  }
+
+  const parts: ImportPartPayload[] = [];
+  const issues: ImportIssue[] = [];
+
+  for (const [rowOffset, row] of rows.slice(headerIndex + 1).entries()) {
+    const rowNumber = headerIndex + rowOffset + 2;
+    if (!row.some((cell) => !isBlankImportCell(cell))) continue;
+
+    const item: ImportPartPayload = {};
+    headers.forEach((field, columnIndex) => {
+      if (!field) return;
+      const value = row[columnIndex];
+      if (field === 'needs_review') {
+        if (!isBlankImportCell(value)) item.needs_review = importBoolean(value);
+        return;
+      }
+      if (field === 'weight_kg' || field === 'emission_factor_kg') {
+        if (!isBlankImportCell(value)) (item as Record<string, unknown>)[field] = importNumber(value);
+        return;
+      }
+      if (field === 'manufacture_start_year' || field === 'manufacture_end_year') {
+        if (!isBlankImportCell(value)) (item as Record<string, unknown>)[field] = importInteger(value);
+        return;
+      }
+      if (!isBlankImportCell(value)) {
+        const text = importText(value, field === 'description' ? 2000 : 500);
+        if (text !== null) (item as Record<string, unknown>)[field] = text;
+      }
+    });
+
+    if (!item.part_number) {
+      issues.push({ row: rowNumber, error: 'Part Number is required' });
+      continue;
+    }
+
+    parts.push(item);
+  }
+
+  if (parts.length > IMPORT_LIMIT) {
+    issues.push({ row: IMPORT_LIMIT + 2, error: `Only the first ${IMPORT_LIMIT} valid rows will be imported` });
+    return { parts: parts.slice(0, IMPORT_LIMIT), issues };
+  }
+
+  return { parts, issues };
 }
 
 function uniqueValues(parts: Part[], key: PartColumn) {
@@ -290,6 +481,7 @@ function ReviewBadge({ part }: { part: Part }) {
 export function PartsPage() {
   const { user } = useAuthStore();
   const canEdit = user?.role === 'Admin' || user?.role === 'User';
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const [parts, setParts] = useState<Part[]>([]);
   const [total, setTotal] = useState(0);
@@ -310,6 +502,9 @@ export function PartsPage() {
   const [form, setForm] = useState<PartForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const [importIssues, setImportIssues] = useState<ImportIssue[]>([]);
 
   const fetchParts = useCallback(async () => {
     setLoading(true);
@@ -542,6 +737,50 @@ export function PartsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    setImportSummary(null);
+    setImportIssues([]);
+    setError('');
+
+    try {
+      const lowerName = file.name.toLowerCase();
+      let rows: unknown[][];
+
+      if (lowerName.endsWith('.csv')) {
+        rows = parseCsvRows(await file.text());
+      } else if (lowerName.endsWith('.xlsx')) {
+        const { readSheet } = await import('read-excel-file/browser');
+        rows = await readSheet(file, 1) as unknown as unknown[][];
+      } else {
+        throw new Error('Use a .xlsx or .csv file for import');
+      }
+
+      const parsed = parseImportRows(rows);
+      if (parsed.parts.length === 0) {
+        setImportIssues(parsed.issues);
+        throw new Error(parsed.issues[0]?.error || 'No importable rows found');
+      }
+
+      const response = await apiRequest<{ success: boolean; summary: ImportSummary; errors?: ImportIssue[] }>('/api/parts/import', {
+        method: 'POST',
+        body: { parts: parsed.parts },
+      });
+
+      setImportSummary(response.summary);
+      setImportIssues([...parsed.issues, ...(response.errors || [])]);
+      await fetchParts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import parts');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const renderCell = (part: Part, column: ColumnConfig) => {
     const value = part[column.key];
 
@@ -598,6 +837,13 @@ export function PartsPage() {
           <p className="text-body text-gray-500 mt-1">Manage your equipment parts, specifications, and environmental data</p>
         </div>
         <div className="flex gap-3 flex-wrap">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+            onChange={(event) => void handleImportFile(event)}
+            className="hidden"
+          />
           <button
             type="button"
             onClick={fetchParts}
@@ -607,6 +853,17 @@ export function PartsPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={importing}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-apple-md text-caption font-medium transition-all hover:shadow-apple-sm bg-signal-teal/10 text-signal-teal disabled:opacity-50"
+            >
+              {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {importing ? 'Importing...' : 'Import Excel'}
+            </button>
+          )}
           <button
             type="button"
             onClick={exportToCSV}
@@ -628,6 +885,26 @@ export function PartsPage() {
           )}
         </div>
       </div>
+
+      {(importSummary || importIssues.length > 0) && (
+        <div className="rounded-apple-lg border border-signal-teal/20 bg-signal-teal/5 p-4">
+          {importSummary && (
+            <p className="text-caption font-medium text-deep-teal">
+              Import complete: {importSummary.created} created, {importSummary.updated} updated, {importSummary.skipped} skipped.
+            </p>
+          )}
+          {importIssues.length > 0 && (
+            <div className="mt-2 space-y-1 text-micro text-gray-600">
+              {importIssues.slice(0, 5).map((issue, index) => (
+                <p key={`${issue.row}-${index}`}>
+                  Row {issue.row}{issue.part_number ? ` (${issue.part_number})` : ''}: {issue.error}
+                </p>
+              ))}
+              {importIssues.length > 5 && <p>{importIssues.length - 5} more issue(s) not shown.</p>}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 stagger-tiles">
         <KpiCard icon={Package} label="Total Parts" value={total.toLocaleString()} detail={`${displayParts.length} shown`} />

@@ -9,7 +9,8 @@ import {
   Warehouse,
   LogOut,
   Recycle,
-  Globe,
+  FolderKanban,
+  Shield,
 } from 'lucide-react';
 import { TenantCompanySelector } from './TenantCompanySelector';
 
@@ -17,12 +18,13 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/parts', label: 'Parts Catalog', icon: Package },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
+  { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/warehouse', label: 'Warehouse', icon: Warehouse },
   { to: '/carbon', label: 'Carbon', icon: Leaf },
 ];
 
 const adminItems = [
-  { to: '/admin/tenants', label: 'Groups', icon: Globe },
+  { to: '/admin', label: 'Administration', icon: Shield },
 ];
 
 function UserAvatar({ name }: { name?: string }) {

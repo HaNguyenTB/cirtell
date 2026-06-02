@@ -311,6 +311,7 @@ const TRANSACTION_FROM = `
   LEFT JOIN markets m ON t.market_id = m.id
   LEFT JOIN warehouses sw ON t.source_warehouse_id = sw.id
   LEFT JOIN warehouses dw ON t.destination_warehouse_id = dw.id
+  LEFT JOIN projects pr ON t.project_id = pr.id
   LEFT JOIN contacts ct ON t.contact_id = ct.id
   LEFT JOIN (
     SELECT transaction_id, COUNT(*) AS item_count
@@ -343,6 +344,7 @@ const TRANSACTION_SELECT = `
     t.po_file_key AS poFileKey,
     t.po_file_name AS poFileName,
     t.project_id AS projectId,
+    pr.name AS projectName,
     t.contact_id AS contactId,
     ct.company_name AS contactCompanyName,
     ct.contact_person_name AS contactPersonName,
@@ -395,7 +397,22 @@ transactionsRoutes.get('/warehouses-list', requirePermission(Permission.VIEW_TRA
 });
 
 transactionsRoutes.get('/projects-list', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
-  return c.json({ success: true, projects: [] });
+  try {
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const { results } = await c.env.DB.prepare(`
+      SELECT id, name AS projectName
+      FROM projects
+      WHERE ${scopeWhere.clause}
+        AND status NOT IN ('cancelled')
+      ORDER BY updated_at DESC, name
+      LIMIT 250
+    `).bind(...scopeWhere.params).all();
+    return c.json({ success: true, projects: results || [] });
+  } catch (err) {
+    console.error('GET /transactions/projects-list error:', err);
+    return c.json({ success: true, projects: [] });
+  }
 });
 
 transactionsRoutes.get('/devices-available', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {

@@ -13,6 +13,70 @@ export const partsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }
 
 partsRoutes.use('*', authMiddleware);
 
+type SQLValue = string | number | null;
+type ImportPartRow = Record<string, unknown> & {
+  part_number?: unknown;
+  manufacturer_part_number?: unknown;
+  model_name?: unknown;
+  vendor?: unknown;
+  technology_type?: unknown;
+  weight_kg?: unknown;
+  emission_factor_kg?: unknown;
+  manufacture_start_year?: unknown;
+  manufacture_end_year?: unknown;
+  category?: unknown;
+  subcategory?: unknown;
+  description?: unknown;
+  needs_review?: unknown;
+  review_notes?: unknown;
+};
+
+interface ImportError {
+  row: number;
+  part_number?: string;
+  error: string;
+}
+
+function normalizeText(value: unknown, maxLength = 500): string | null {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function parseNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseInteger(value: unknown): number | null {
+  const parsed = parseNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
+}
+
+function parseBoolean(value: unknown): number {
+  if (value === true || value === 1) return 1;
+  if (value === false || value === 0 || value === undefined || value === null || value === '') return 0;
+  const text = String(value).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'review', 'needs review'].includes(text) ? 1 : 0;
+}
+
+async function resolveVendorId(db: D1Database, vendor: unknown): Promise<string | null> {
+  const vendorName = normalizeText(vendor, 160);
+  if (!vendorName) return null;
+
+  const existing = await db.prepare('SELECT id FROM vendors WHERE vendor_name = ?')
+    .bind(vendorName)
+    .first<{ id: string }>();
+  if (existing) return existing.id;
+
+  const vendorId = `vendor_${crypto.randomUUID()}`;
+  await db.prepare('INSERT INTO vendors (id, vendor_name) VALUES (?, ?)')
+    .bind(vendorId, vendorName)
+    .run();
+  return vendorId;
+}
+
 // ============================================================================
 // GET /api/parts - list all parts
 // ============================================================================
@@ -30,9 +94,17 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
     appendScopeCondition(conditions, params, scope, 'p.tenant_id', 'p.company_id');
 
     if (search) {
-      conditions.push('(p.part_number LIKE ? OR p.model_name LIKE ? OR v.vendor_name LIKE ?)');
+      conditions.push(`(
+        p.part_number LIKE ?
+        OR p.manufacturer_part_number LIKE ?
+        OR p.model_name LIKE ?
+        OR v.vendor_name LIKE ?
+        OR p.category LIKE ?
+        OR p.subcategory LIKE ?
+        OR p.description LIKE ?
+      )`);
       const s = `%${search}%`;
-      params.push(s, s, s);
+      params.push(s, s, s, s, s, s, s);
     }
     if (category) { conditions.push('p.category = ?'); params.push(category); }
     if (vendor) { conditions.push('v.vendor_name = ?'); params.push(vendor); }
@@ -94,6 +166,145 @@ partsRoutes.get('/:id', requirePermission(Permission.VIEW_PARTS), async (c) => {
   } catch (err: any) {
     console.error('GET /parts/:id error:', err);
     return c.json({ success: false, error: 'Failed to fetch part' }, 500);
+  }
+});
+
+// ============================================================================
+// POST /api/parts/import - bulk import from spreadsheet rows
+// ============================================================================
+partsRoutes.post('/import', requirePermission(Permission.EDIT_PARTS), async (c) => {
+  try {
+    const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeValues = scopeInsertValues(scope, user);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const body = await c.req.json<{ parts?: ImportPartRow[] }>();
+    const rows = Array.isArray(body.parts) ? body.parts.slice(0, 1000) : [];
+
+    if (rows.length === 0) {
+      return c.json({ success: false, error: 'No parts were provided for import' }, 400);
+    }
+
+    const errors: ImportError[] = [];
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const [index, row] of rows.entries()) {
+      const rowNumber = index + 2;
+      const partNumber = normalizeText(row.part_number, 160);
+      if (!partNumber) {
+        skipped += 1;
+        errors.push({ row: rowNumber, error: 'Part Number is required' });
+        continue;
+      }
+
+      try {
+        const vendorId = await resolveVendorId(c.env.DB, row.vendor);
+        const existing = await c.env.DB.prepare(`SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?) AND ${scopeWhere.clause}`)
+          .bind(partNumber, ...scopeWhere.params)
+          .first<{ id: string }>();
+
+        if (existing) {
+          const fields: Array<[keyof ImportPartRow, string, SQLValue]> = [
+            ['manufacturer_part_number', 'manufacturer_part_number', normalizeText(row.manufacturer_part_number, 160)],
+            ['model_name', 'model_name', normalizeText(row.model_name, 240)],
+            ['technology_type', 'technology_type', normalizeText(row.technology_type, 160)],
+            ['weight_kg', 'weight_kg', parseNumber(row.weight_kg)],
+            ['emission_factor_kg', 'emission_factor_kg', parseNumber(row.emission_factor_kg)],
+            ['manufacture_start_year', 'manufacture_start_year', parseInteger(row.manufacture_start_year)],
+            ['manufacture_end_year', 'manufacture_end_year', parseInteger(row.manufacture_end_year)],
+            ['category', 'category', normalizeText(row.category, 160)],
+            ['subcategory', 'subcategory', normalizeText(row.subcategory, 160)],
+            ['description', 'description', normalizeText(row.description, 2000)],
+            ['needs_review', 'needs_review', parseBoolean(row.needs_review)],
+            ['review_notes', 'review_notes', normalizeText(row.review_notes, 1000)],
+          ];
+          const sets: string[] = [];
+          const params: SQLValue[] = [];
+
+          if (row.vendor !== undefined) {
+            sets.push('vendor_id = ?');
+            params.push(vendorId);
+          }
+
+          for (const [inputKey, column, value] of fields) {
+            if (row[inputKey] !== undefined) {
+              sets.push(`${column} = ?`);
+              params.push(value);
+            }
+          }
+
+          if (sets.length > 0) {
+            sets.push('updated_at = ?');
+            params.push(new Date().toISOString(), existing.id);
+            await c.env.DB.prepare(`UPDATE parts SET ${sets.join(', ')} WHERE id = ?`)
+              .bind(...params)
+              .run();
+          }
+          updated += 1;
+          continue;
+        }
+
+        const id = crypto.randomUUID();
+        const now = new Date().toISOString();
+        await c.env.DB.prepare(`
+          INSERT INTO parts (
+            id, tenant_id, company_id, part_number, manufacturer_part_number, model_name, vendor_id,
+            technology_type, weight_kg, emission_factor_kg,
+            manufacture_start_year, manufacture_end_year,
+            category, subcategory, description,
+            needs_review, review_notes, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          id,
+          scopeValues.tenantId,
+          scopeValues.companyId,
+          partNumber,
+          normalizeText(row.manufacturer_part_number, 160),
+          normalizeText(row.model_name, 240),
+          vendorId,
+          normalizeText(row.technology_type, 160),
+          parseNumber(row.weight_kg),
+          parseNumber(row.emission_factor_kg),
+          parseInteger(row.manufacture_start_year),
+          parseInteger(row.manufacture_end_year),
+          normalizeText(row.category, 160),
+          normalizeText(row.subcategory, 160),
+          normalizeText(row.description, 2000),
+          parseBoolean(row.needs_review),
+          normalizeText(row.review_notes, 1000),
+          now,
+          now,
+        ).run();
+        created += 1;
+      } catch (rowError) {
+        skipped += 1;
+        errors.push({
+          row: rowNumber,
+          part_number: partNumber,
+          error: rowError instanceof Error ? rowError.message : 'Failed to import row',
+        });
+      }
+    }
+
+    await logAudit(
+      c.env.DB,
+      user.id,
+      'IMPORT_PARTS',
+      'parts',
+      crypto.randomUUID(),
+      JSON.stringify({ created, updated, skipped, total: rows.length }),
+    );
+
+    return c.json({
+      success: true,
+      summary: { created, updated, skipped, total: rows.length },
+      errors,
+    });
+  } catch (err: any) {
+    console.error('POST /parts/import error:', err);
+    return c.json({ success: false, error: 'Failed to import parts' }, 500);
   }
 });
 

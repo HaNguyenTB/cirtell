@@ -11,72 +11,62 @@ import { carbonRoutes } from './routes/carbon';
 import { dashboardRoutes } from './routes/dashboard';
 import { warehouseRoutes } from './routes/warehouse';
 import { adminRoutes } from './routes/admin';
+import { projectRoutes } from './routes/projects';
 import type { User } from './middleware/auth';
 import { rateLimitMiddleware } from './middleware/rateLimit';
+import { cookieSessionCsrfMiddleware } from './middleware/csrf';
+import {
+  corsPreflightResponse,
+  fatalCorsErrorResponse,
+  getAllowedOrigin,
+  withCorsAndSecurityHeaders,
+} from './http/cors';
 
 export interface Env {
   DB: D1Database;
+  EVIDENCE_BUCKET: R2Bucket;
   GOOGLE_CLIENT_ID: string;
   JWT_SECRET: string;
   FRONTEND_URL: string;
+  CORS_ALLOWED_ORIGINS?: string;
 }
 
 type Variables = { user: User };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// ---------------------------------------------------------------------------
-// CORS
-// ---------------------------------------------------------------------------
-function getAllowedOrigin(env: Env, requestOrigin: string | undefined): string {
-  const frontendUrl = (env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
-  const allowedOrigins = [
-    frontendUrl,
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://127.0.0.1:5173',
-  ];
-  return requestOrigin && allowedOrigins.includes(requestOrigin) ? requestOrigin : allowedOrigins[0];
-}
-
 app.use('*', async (c, next) => {
   if (c.req.method === 'OPTIONS') {
     const origin = c.req.header('Origin');
     const allowedOrigin = getAllowedOrigin(c.env, origin);
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': allowedOrigin,
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Max-Age': '86400',
-      },
-    });
+    return corsPreflightResponse(allowedOrigin);
   }
   await next();
 });
 
-// Add CORS headers to every response
-app.use('*', async (c, next) => {
-  await next();
-  const origin = c.req.header('Origin');
-  const allowedOrigin = getAllowedOrigin(c.env, origin);
-  c.res.headers.set('Access-Control-Allow-Origin', allowedOrigin);
-  c.res.headers.set('Access-Control-Allow-Credentials', 'true');
-});
+const STANDARD_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
+const EVIDENCE_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 
-// Body size limit (5 MB)
+// Body size limit. Evidence files are stored in R2, so they get a larger cap.
 app.use('*', async (c, next) => {
   const contentLength = c.req.header('Content-Length');
-  if (contentLength && parseInt(contentLength) > 5 * 1024 * 1024) {
-    return c.json({ success: false, error: 'Request body too large. Maximum size is 5 MB.' }, 413);
+  const path = new URL(c.req.url).pathname;
+  const limit = c.req.method === 'POST' && /^\/api\/projects\/[^/]+\/evidence$/.test(path)
+    ? EVIDENCE_BODY_LIMIT_BYTES
+    : STANDARD_BODY_LIMIT_BYTES;
+
+  if (contentLength && parseInt(contentLength, 10) > limit) {
+    const limitMb = Math.floor(limit / 1024 / 1024);
+    return c.json({ success: false, error: `Request body too large. Maximum size is ${limitMb} MB.` }, 413);
   }
   await next();
 });
 
 // Rate limiting
 app.use('*', rateLimitMiddleware);
+
+// CSRF protection for unsafe requests authenticated by the HttpOnly session cookie.
+app.use('*', cookieSessionCsrfMiddleware);
 
 // Health check
 app.get('/health', (c) =>
@@ -91,6 +81,7 @@ app.route('/api/parts', partsRoutes);
 app.route('/api/transactions', transactionsRoutes);
 app.route('/api/ghg', carbonRoutes);
 app.route('/api/warehouses', warehouseRoutes);
+app.route('/api/projects', projectRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api', dashboardRoutes);
 
@@ -103,4 +94,15 @@ app.onError((err, c) => {
   return c.json({ success: false, error: 'Internal server error' }, 500);
 });
 
-export default app;
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const allowedOrigin = getAllowedOrigin(env, request.headers.get('Origin') || undefined);
+    try {
+      const response = await app.fetch(request, env, ctx);
+      return withCorsAndSecurityHeaders(response, allowedOrigin);
+    } catch (err) {
+      console.error('[FATAL WORKER ERROR]', err);
+      return fatalCorsErrorResponse(allowedOrigin);
+    }
+  },
+};
