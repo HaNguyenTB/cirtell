@@ -1,4 +1,4 @@
--- Cirveris-style multi-tenant foundation for Cirtell.
+-- Cirtell multi-tenant foundation.
 -- Adds platform/group/company hierarchy and tenant/company ownership columns.
 
 -- ============================================================================
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS tenant_app_access (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_app_access_tenant ON tenant_app_access(tenant_id);
 
--- Seed the Cirveris-style group tree.
+-- Seed the Cirtell group tree.
 INSERT OR IGNORE INTO tenants (id, name, domain, is_active, is_platform_tenant, parent_tenant_id, group_type)
 VALUES
   ('tenant_cirtell_platform', 'Cirtell Platform', 'cirtell.pages.dev', 1, 1, NULL, NULL),

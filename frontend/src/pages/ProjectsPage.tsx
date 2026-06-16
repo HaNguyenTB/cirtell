@@ -869,7 +869,7 @@ function ProjectsListView() {
           <FolderKanban className="mx-auto mb-3 h-12 w-12 text-gray-300" />
           <h3 className="text-lg font-semibold text-gray-900">No projects yet</h3>
           <p className="mx-auto mt-1 max-w-md text-caption text-gray-400">
-            {canManage ? 'Create your first circular economy project with the Cirveris project workflow.' : 'No assigned projects are available for your current scope.'}
+            {canManage ? 'Create your first circular economy project with the Cirtell project workflow.' : 'No assigned projects are available for your current scope.'}
           </p>
           {canManage && (
             <button type="button" onClick={() => setShowWizard(true)} className="btn-primary mt-4">
@@ -1307,7 +1307,7 @@ function StepReview({ form, vendors, technologies }: { form: CreateProjectData; 
     <div className="space-y-5">
       <div className="rounded-apple-md border border-signal-teal/20 bg-signal-teal/10 p-4">
         <p className="text-caption font-medium text-signal-teal">Ready to create your project.</p>
-        <p className="mt-1 text-micro text-signal-teal/80">A six-stage Cirveris workflow will be created automatically.</p>
+        <p className="mt-1 text-micro text-signal-teal/80">A six-stage Cirtell workflow will be created automatically.</p>
       </div>
       <div className="rounded-apple-md bg-gray-50 p-4">
         {rows.map(([label, value]) => (
@@ -2370,7 +2370,7 @@ function ReportsTab({ bundle }: { bundle: ProjectBundle }) {
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sub-heading font-semibold text-gray-900">Project Report</h2>
-          <p className="text-caption text-gray-500">Cirveris-style project execution snapshot</p>
+          <p className="text-caption text-gray-500">Cirtell project execution snapshot</p>
         </div>
         <button type="button" onClick={exportReport} className="btn-primary">
           <FileText className="h-4 w-4" />

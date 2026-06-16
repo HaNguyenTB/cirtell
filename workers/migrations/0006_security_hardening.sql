@@ -1,4 +1,4 @@
--- Cirveris-style security hardening for Cirtell.
+-- Cirtell security hardening.
 -- Binds Google SSO identity to users and enables server-issued app sessions.
 
 ALTER TABLE users ADD COLUMN google_sub TEXT;

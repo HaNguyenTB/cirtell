@@ -1,4 +1,4 @@
--- Cirveris-style Project & Value-Chain Execution Module for Cirtell.
+-- Cirtell Project & Value-Chain Execution Module.
 -- Adds tenant-scoped telecom decommissioning/circularity project records.
 
 -- ============================================================================

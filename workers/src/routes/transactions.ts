@@ -1,5 +1,5 @@
 /**
- * Transactions routes - Cirveris-style transaction workspace for Cirtell.
+ * Transactions routes - Cirtell transaction workspace.
  * Tenant/company scoped, with enriched reference data and optional line items.
  */
 
@@ -360,7 +360,7 @@ const TRANSACTION_SELECT = `
 `;
 
 // ============================================================================
-// Reference routes used by the Cirveris transaction UI
+// Reference routes used by the Cirtell transaction UI
 // ============================================================================
 transactionsRoutes.get('/markets', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {

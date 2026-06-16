@@ -1,5 +1,5 @@
 /**
- * Projects routes - Cirveris-style project workspace for Cirtell.
+ * Projects routes - Cirtell project workspace.
  * Tenant/company scoped, with list/detail tabs for workflow, materials,
  * logistics, financials, evidence, comments, reports, and members.
  */

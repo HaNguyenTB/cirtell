@@ -95,7 +95,7 @@ export function LandingPage() {
               Cirtell
             </h1>
             <p className="mt-6 text-lg sm:text-xl text-white/55 max-w-2xl leading-relaxed">
-              Track telecom assets from deployment to decommission with Cirveris-style inventory intelligence.
+              Track telecom assets from deployment to decommission with Cirtell inventory intelligence.
             </p>
 
             <div className="mt-10 flex items-center gap-4">

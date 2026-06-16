@@ -270,7 +270,7 @@ export function AdministrationPage() {
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h1 className="font-display text-tile font-semibold text-gray-900">Administration</h1>
-          <p className="mt-1 text-caption text-gray-500">A simplified Cirveris-style control center for Cirtell.</p>
+          <p className="mt-1 text-caption text-gray-500">Cirtell control center for users, companies, groups, and audit activity.</p>
         </div>
         <button type="button" onClick={refresh} className="btn-secondary w-fit" disabled={refreshing || loading}>
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
