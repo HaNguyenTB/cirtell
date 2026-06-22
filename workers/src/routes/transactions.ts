@@ -434,6 +434,9 @@ const TRANSACTION_SELECT = `
     dw.name AS destinationWarehouseName,
     dw.code AS destinationWarehouseCode,
     COALESCE(ti.item_count, 0) AS itemCount,
+    t.inventory_sync_status AS inventorySyncStatus,
+    t.voided_at AS voidedAt,
+    t.voided_by AS voidedBy,
     t.created_at AS createdAt,
     t.updated_at AS updatedAt
 `;
@@ -567,6 +570,7 @@ transactionsRoutes.get('/summary', requirePermission(Permission.VIEW_TRANSACTION
         SUM(quantity * unit_price_usd) AS totalValue
       FROM transactions
       WHERE ${scopeWhere.clause}
+        AND COALESCE(inventory_sync_status, 'not_ready') <> 'voided'
     `).bind(...scopeWhere.params).first<{
       total: number;
       purchases: number;
@@ -604,12 +608,18 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
     const marketId = c.req.query('market_id');
+    const includeVoided = ['true', '1', 'yes'].includes(
+      (c.req.query('include_voided') || c.req.query('includeVoided') || '').toLowerCase(),
+    );
     const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 500);
     const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
 
     const params: SQLValue[] = [];
     const conditions: string[] = [];
     appendScopeCondition(conditions, params, scope, 't.tenant_id', 't.company_id');
+    if (!includeVoided) {
+      conditions.push("COALESCE(t.inventory_sync_status, 'not_ready') <> 'voided'");
+    }
 
     if (movementType) {
       conditions.push('t.movement_type = ?');
@@ -1239,20 +1249,75 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const requestOwnership = scopeInsertValues(scope, user);
     const id = c.req.param('id')!;
 
-    const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+    const existing = await c.env.DB.prepare(`
+      SELECT
+        id, tenant_id, company_id, inventory_sync_status,
+        inventory_sync_version, voided_at
+      FROM transactions
+      WHERE id = ? AND ${scopeWhere.clause}
+    `)
       .bind(id, ...scopeWhere.params)
-      .first<{ id: string }>();
+      .first<{
+        id: string;
+        tenant_id: string | null;
+        company_id: string | null;
+        inventory_sync_status: string;
+        inventory_sync_version: number;
+        voided_at: string | null;
+      }>();
     if (!existing) return c.json({ success: false, error: 'Transaction not found' }, 404);
 
-    await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
-    await c.env.DB.prepare(`DELETE FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
-      .bind(id, ...scopeWhere.params)
-      .run();
+    if (existing.inventory_sync_status === 'voided' || existing.voided_at) {
+      return c.json({ success: true, inventorySyncStatus: 'voided' });
+    }
+
+    const transactionOwnership: ScopeValues = {
+      tenantId: existing.tenant_id || requestOwnership.tenantId,
+      companyId: existing.company_id || requestOwnership.companyId,
+    };
+    const now = new Date().toISOString();
+    const nextSyncVersion = existing.inventory_sync_status === 'synced'
+      ? (existing.inventory_sync_version || 0) + 1
+      : (existing.inventory_sync_version || 0);
+    const reversalMovements = existing.inventory_sync_status === 'synced'
+      ? await buildTransactionReversalMovements(c.env.DB, id, transactionOwnership, {
+        createdBy: user.id,
+        createdAt: now,
+        syncVersion: nextSyncVersion,
+        idempotencyPrefix: `reversal:void:${id}:v${nextSyncVersion}`,
+      })
+      : [];
+    const inventoryBatch = reversalMovements.length > 0
+      ? await prepareInventoryMovementBatch(c.env.DB, reversalMovements, transactionOwnership)
+      : { statements: [] };
+
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(`
+        UPDATE transactions
+        SET inventory_sync_status = 'voided',
+            inventory_sync_version = ?,
+            inventory_synced_at = NULL,
+            inventory_sync_error = NULL,
+            voided_at = ?,
+            voided_by = ?,
+            updated_at = ?
+        WHERE id = ? AND ${scopeWhere.clause}
+      `).bind(nextSyncVersion, now, user.id, now, id, ...scopeWhere.params),
+      ...inventoryBatch.statements,
+    ];
+
+    await c.env.DB.batch(statements);
+
     await logAudit(c.env.DB, user.id, 'DELETE_TRANSACTION', 'transactions', id);
-    return c.json({ success: true });
+    return c.json({ success: true, inventorySyncStatus: 'voided' });
   } catch (err) {
+    if (err instanceof InventorySyncError) {
+      const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
+      return c.json({ success: false, error: err.message, code: err.code }, status);
+    }
     console.error('DELETE /transactions/:id error:', err);
     return c.json({ success: false, error: 'Failed to delete transaction' }, 500);
   }
