@@ -9,6 +9,7 @@ import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 import {
+  allocateTransactionInventoryMovements,
   applyInventoryMovements,
   buildTransactionInventoryMovements,
   InventorySyncError,
@@ -783,8 +784,12 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       })),
     });
 
+    const allocatedSyncMovements = syncPlan.ready
+      ? await allocateTransactionInventoryMovements(c.env.DB, syncPlan.movements, ownership)
+      : [];
+
     if (syncPlan.ready) {
-      await preflightInventoryMovements(c.env.DB, syncPlan.movements, ownership);
+      await preflightInventoryMovements(c.env.DB, allocatedSyncMovements, ownership);
     }
 
     await c.env.DB.prepare(`
@@ -829,7 +834,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
     let inventorySynced = false;
     if (syncPlan.ready) {
       try {
-        await applyInventoryMovements(c.env.DB, syncPlan.movements.map((movement) => ({
+        await applyInventoryMovements(c.env.DB, allocatedSyncMovements.map((movement) => ({
           ...movement,
           createdBy: user.id,
           createdAt: now,

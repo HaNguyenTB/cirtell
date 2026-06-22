@@ -110,6 +110,16 @@ interface InventoryDelta {
   quantityDelta: number;
 }
 
+interface AllocationCandidate {
+  zoneId: string | null;
+  available: number;
+}
+
+interface AllocationRow {
+  zone_id: string | null;
+  quantity: number;
+}
+
 const INVENTORY_CONDITIONS: InventoryCondition[] = ['New', 'Good', 'Fair', 'Poor', 'Scrap'];
 const INVENTORY_MOVEMENT_TYPES: InventoryMovementType[] = ['Receive', 'Ship', 'Transfer', 'Adjust'];
 
@@ -316,6 +326,107 @@ function inventoryDeltaKey(
   condition: InventoryCondition,
 ): string {
   return [warehouseId, zoneId || '', partId, condition].join('\u001f');
+}
+
+async function allocationCandidates(
+  db: D1Database,
+  ownership: ScopeValues,
+  warehouseId: string,
+  partId: string,
+  condition: InventoryCondition,
+): Promise<AllocationCandidate[]> {
+  const scoped = ownershipClause(ownership);
+  const { results } = await db.prepare(`
+    SELECT zone_id, quantity
+    FROM inventory
+    WHERE warehouse_id = ? AND part_id = ? AND condition = ?
+      AND quantity > 0 AND ${scoped.clause}
+    ORDER BY CASE WHEN zone_id IS NULL THEN 0 ELSE 1 END,
+             COALESCE(zone_id, ''),
+             id
+  `).bind(warehouseId, partId, condition, ...scoped.params).all<AllocationRow>();
+
+  return (results || []).map((row) => ({
+    zoneId: row.zone_id || null,
+    available: row.quantity,
+  }));
+}
+
+export async function allocateTransactionInventoryMovements(
+  db: D1Database,
+  movements: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<InventoryMovementInput[]> {
+  requireScopedOwnership(ownership);
+
+  const allocated: InventoryMovementInput[] = [];
+  const candidateCache = new Map<string, AllocationCandidate[]>();
+
+  for (const movement of movements) {
+    const quantity = requirePositiveInteger(movement.quantity);
+    const condition = normalizeInventoryCondition(movement.condition);
+
+    if (!movement.fromWarehouseId || movement.fromZoneId) {
+      allocated.push({
+        ...movement,
+        quantity,
+        condition,
+        fromZoneId: movement.fromZoneId || null,
+        toZoneId: null,
+      });
+      continue;
+    }
+
+    const cacheKey = inventoryDeltaKey(
+      movement.fromWarehouseId,
+      null,
+      movement.partId,
+      condition,
+    );
+    let candidates = candidateCache.get(cacheKey);
+    if (!candidates) {
+      candidates = await allocationCandidates(
+        db,
+        ownership,
+        movement.fromWarehouseId,
+        movement.partId,
+        condition,
+      );
+      candidateCache.set(cacheKey, candidates);
+    }
+
+    let remaining = quantity;
+    let chunkIndex = 0;
+
+    for (const candidate of candidates) {
+      if (remaining <= 0) break;
+      if (candidate.available <= 0) continue;
+
+      const chunkQuantity = Math.min(candidate.available, remaining);
+      candidate.available -= chunkQuantity;
+      remaining -= chunkQuantity;
+
+      allocated.push({
+        ...movement,
+        quantity: chunkQuantity,
+        condition,
+        fromZoneId: candidate.zoneId,
+        toZoneId: null,
+        idempotencyKey: movement.idempotencyKey
+          ? `${movement.idempotencyKey}:chunk:${chunkIndex}:${candidate.zoneId || 'default'}`
+          : null,
+      });
+      chunkIndex += 1;
+    }
+
+    if (remaining > 0) {
+      throw new InsufficientStockError(
+        `Insufficient stock for part ${movement.partId} in source warehouse`,
+      );
+    }
+  }
+
+  return allocated;
 }
 
 function addInventoryDelta(
