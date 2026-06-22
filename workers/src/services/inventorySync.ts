@@ -37,6 +37,11 @@ export interface AppliedInventoryMovement {
   idempotent: boolean;
 }
 
+export interface PreparedInventoryMovementBatch {
+  statements: D1PreparedStatement[];
+  movements: AppliedInventoryMovement[];
+}
+
 export interface TransactionInventoryItemInput {
   id?: string | null;
   partId?: string | null;
@@ -568,8 +573,29 @@ export async function applyInventoryMovements(
   inputs: InventoryMovementInput[],
   ownership: ScopeValues,
 ): Promise<AppliedInventoryMovement[]> {
+  const batch = await prepareInventoryMovementBatch(db, inputs, ownership);
+  if (batch.statements.length === 0) return batch.movements;
+
+  try {
+    await db.batch(batch.statements);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.toLowerCase().includes('check constraint')) {
+      throw new InsufficientStockError();
+    }
+    throw err;
+  }
+
+  return batch.movements;
+}
+
+export async function prepareInventoryMovementBatch(
+  db: D1Database,
+  inputs: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<PreparedInventoryMovementBatch> {
   const { prepared, deltas, idempotent } = await inventoryDeltasForMovements(db, inputs, ownership);
-  if (prepared.length === 0) return idempotent;
+  if (prepared.length === 0) return { statements: [], movements: idempotent };
 
   await assertInventoryDeltasAvailable(db, ownership, deltas);
 
@@ -652,20 +678,13 @@ export async function applyInventoryMovements(
     );
   }
 
-  try {
-    await db.batch(statements);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.toLowerCase().includes('check constraint')) {
-      throw new InsufficientStockError();
-    }
-    throw err;
-  }
-
-  return [
-    ...idempotent,
-    ...prepared.map((movement) => ({ id: movement.id, idempotent: false })),
-  ];
+  return {
+    statements,
+    movements: [
+      ...idempotent,
+      ...prepared.map((movement) => ({ id: movement.id, idempotent: false })),
+    ],
+  };
 }
 
 async function applyDestinationIncrement(

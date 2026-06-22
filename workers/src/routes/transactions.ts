@@ -10,9 +10,9 @@ import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 import {
   allocateTransactionInventoryMovements,
-  applyInventoryMovements,
   buildTransactionInventoryMovements,
   InventorySyncError,
+  prepareInventoryMovementBatch,
   preflightInventoryMovements,
   type TransactionMovementType,
 } from '../services/inventorySync';
@@ -289,29 +289,39 @@ async function insertLineItems(
   ownership: ScopeValues,
 ): Promise<void> {
   for (const item of lineItems) {
-    await db.prepare(`
-      INSERT INTO transaction_items (
-        id, tenant_id, company_id, transaction_id, part_id, serial_number, condition, quantity,
-        unit_price_usd, source_warehouse_id, destination_warehouse_id,
-        notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      item.id,
-      ownership.tenantId,
-      ownership.companyId,
-      transactionId,
-      item.partId,
-      item.serialNumber,
-      item.condition,
-      item.quantity,
-      item.unitPrice,
-      item.sourceWarehouseId,
-      item.destinationWarehouseId,
-      item.notes,
-      now,
-      now,
-    ).run();
+    await lineItemInsertStatement(db, transactionId, item, now, ownership).run();
   }
+}
+
+function lineItemInsertStatement(
+  db: D1Database,
+  transactionId: string,
+  item: PreparedLineItem,
+  now: string,
+  ownership: ScopeValues,
+): D1PreparedStatement {
+  return db.prepare(`
+    INSERT INTO transaction_items (
+      id, tenant_id, company_id, transaction_id, part_id, serial_number, condition, quantity,
+      unit_price_usd, source_warehouse_id, destination_warehouse_id,
+      notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    item.id,
+    ownership.tenantId,
+    ownership.companyId,
+    transactionId,
+    item.partId,
+    item.serialNumber,
+    item.condition,
+    item.quantity,
+    item.unitPrice,
+    item.sourceWarehouseId,
+    item.destinationWarehouseId,
+    item.notes,
+    now,
+    now,
+  );
 }
 
 const TRANSACTION_FROM = `
@@ -792,15 +802,29 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       await preflightInventoryMovements(c.env.DB, allocatedSyncMovements, ownership);
     }
 
-    await c.env.DB.prepare(`
+    const inventoryBatch = syncPlan.ready
+      ? await prepareInventoryMovementBatch(c.env.DB, allocatedSyncMovements.map((movement) => ({
+        ...movement,
+        createdBy: user.id,
+        createdAt: now,
+      })), ownership)
+      : { statements: [], movements: [] };
+
+    const inventorySyncStatus = syncPlan.ready ? 'synced' : 'not_ready';
+    const inventorySyncError = syncPlan.ready
+      ? null
+      : syncPlan.reason || 'Transaction is not ready for inventory sync';
+    const statements: D1PreparedStatement[] = [];
+
+    statements.push(c.env.DB.prepare(`
       INSERT INTO transactions (
         id, tenant_id, company_id, date, movement_type, quantity, unit_price_usd,
         vendor, part_id, serial_number, condition,
         po_number, po_file_key, po_file_name,
         market_id, source_warehouse_id, destination_warehouse_id,
         project_id, contact_id, created_by, created_at, updated_at,
-        inventory_sync_status, inventory_sync_version, inventory_sync_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        inventory_sync_status, inventory_sync_version, inventory_synced_at, inventory_sync_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       ownership.tenantId,
@@ -824,46 +848,26 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       user.id,
       now,
       now,
-      'not_ready',
-      0,
-      syncPlan.ready ? null : syncPlan.reason || 'Transaction is not ready for inventory sync',
-    ).run();
+      inventorySyncStatus,
+      syncPlan.ready ? 1 : 0,
+      syncPlan.ready ? now : null,
+      inventorySyncError,
+    ));
 
-    await insertLineItems(c.env.DB, id, lineItems, now, ownership);
-
-    let inventorySynced = false;
-    if (syncPlan.ready) {
-      try {
-        await applyInventoryMovements(c.env.DB, allocatedSyncMovements.map((movement) => ({
-          ...movement,
-          createdBy: user.id,
-          createdAt: now,
-        })), ownership);
-        inventorySynced = true;
-      } catch (syncErr) {
-        await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
-        await c.env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(id).run();
-        throw syncErr;
-      }
-
-      await c.env.DB.prepare(`
-        UPDATE transactions
-        SET inventory_sync_status = 'synced',
-            inventory_sync_version = ?,
-            inventory_synced_at = ?,
-            inventory_sync_error = NULL,
-            updated_at = ?
-        WHERE id = ?
-      `).bind(1, now, now, id).run();
+    for (const item of lineItems) {
+      statements.push(lineItemInsertStatement(c.env.DB, id, item, now, ownership));
     }
+    statements.push(...inventoryBatch.statements);
+
+    await c.env.DB.batch(statements);
 
     await logAudit(c.env.DB, user.id, 'CREATE_TRANSACTION', 'transactions', id);
 
     return c.json({
       success: true,
       id,
-      inventorySyncStatus: inventorySynced ? 'synced' : 'not_ready',
-      inventorySyncError: syncPlan.ready ? null : syncPlan.reason || 'Transaction is not ready for inventory sync',
+      inventorySyncStatus,
+      inventorySyncError,
     }, 201);
   } catch (err) {
     if (err instanceof ValidationError) {
