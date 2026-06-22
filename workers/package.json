@@ -8,7 +8,9 @@
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create cirtell-db",
     "db:migrate:local": "wrangler d1 migrations apply cirtell-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply cirtell-db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply cirtell-db --remote",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "",
   "license": "UNLICENSED",
@@ -18,8 +20,10 @@
     "jose": "^6.1.3"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@cloudflare/workers-types": "^4.20260103.0",
     "typescript": "^5.4.2",
+    "vitest": "^4.1.9",
     "wrangler": "^4.76.0"
   }
 }
