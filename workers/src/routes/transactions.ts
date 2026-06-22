@@ -188,7 +188,18 @@ function ownershipClause(values: ScopeValues, alias = ''): { clause: string; par
   const prefix = alias ? `${alias}.` : '';
   if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
   if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
-  return { clause: '1=1', params: [] };
+  return { clause: '1=0', params: [] };
+}
+
+function requireTransactionScope(ownership: ScopeValues): ScopeValues {
+  if (!ownership.companyId && !ownership.tenantId) {
+    throw new InventorySyncError(
+      'Tenant or company scope is required for transaction inventory sync',
+      'MISSING_TRANSACTION_SCOPE',
+      403,
+    );
+  }
+  return ownership;
 }
 
 async function resolvePart(
@@ -502,10 +513,10 @@ function transactionOwnership(
   transaction: { tenant_id: string | null; company_id: string | null },
   fallback: ScopeValues,
 ): ScopeValues {
-  return {
+  return requireTransactionScope({
     tenantId: transaction.tenant_id || fallback.tenantId,
     companyId: transaction.company_id || fallback.companyId,
-  };
+  });
 }
 
 async function buildBackfillCandidate(
@@ -948,7 +959,24 @@ transactionsRoutes.post('/inventory-backfill', requirePermission(Permission.MANA
     const simulatedMovements: InventoryMovementInput[] = [];
 
     for (const transaction of rows || []) {
-      const ownership = transactionOwnership(transaction, requestOwnership);
+      let ownership: ScopeValues;
+      try {
+        ownership = transactionOwnership(transaction, requestOwnership);
+      } catch (err) {
+        if (err instanceof InventorySyncError) {
+          results.push({
+            transactionId: transaction.id,
+            date: transaction.date,
+            createdAt: transaction.created_at,
+            classification: 'not_ready',
+            reason: err.message,
+            movementCount: 0,
+            applied: false,
+          });
+          continue;
+        }
+        throw err;
+      }
       const startingMovements = dryRun ? simulatedMovements : [];
       const candidate = await buildBackfillCandidate(
         c.env.DB,
@@ -1149,7 +1177,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
   try {
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
-    const ownership = scopeInsertValues(scope, user);
+    const ownership = requireTransactionScope(scopeInsertValues(scope, user));
     const body = await c.req.json<IncomingBody>();
 
     const date = normalizeText(firstDefined(body, ['date']));
