@@ -71,6 +71,18 @@ export interface TransactionInventoryBuildResult {
   movements: InventoryMovementInput[];
 }
 
+export interface AllocationOptions {
+  startingMovements?: InventoryMovementInput[];
+}
+
+export interface ReversalOptions {
+  createdBy?: string | null;
+  createdAt?: string | null;
+  notes?: string | null;
+  syncVersion?: number;
+  idempotencyPrefix?: string;
+}
+
 interface InventoryRow {
   id: string;
   quantity: number;
@@ -333,6 +345,22 @@ function inventoryDeltaKey(
   return [warehouseId, zoneId || '', partId, condition].join('\u001f');
 }
 
+function movementInputDeltas(inputs: InventoryMovementInput[]): Map<string, InventoryDelta> {
+  const deltas = new Map<string, InventoryDelta>();
+  for (const input of inputs) {
+    const quantity = requirePositiveInteger(input.quantity);
+    const condition = normalizeInventoryCondition(input.condition);
+
+    if (input.fromWarehouseId) {
+      addInventoryDelta(deltas, input.fromWarehouseId, input.fromZoneId, input.partId, condition, -quantity);
+    }
+    if (input.toWarehouseId) {
+      addInventoryDelta(deltas, input.toWarehouseId, input.toZoneId, input.partId, condition, quantity);
+    }
+  }
+  return deltas;
+}
+
 async function allocationCandidates(
   db: D1Database,
   ownership: ScopeValues,
@@ -361,11 +389,13 @@ export async function allocateTransactionInventoryMovements(
   db: D1Database,
   movements: InventoryMovementInput[],
   ownership: ScopeValues,
+  options: AllocationOptions = {},
 ): Promise<InventoryMovementInput[]> {
   requireScopedOwnership(ownership);
 
   const allocated: InventoryMovementInput[] = [];
   const candidateCache = new Map<string, AllocationCandidate[]>();
+  const startingDeltas = movementInputDeltas(options.startingMovements || []);
 
   for (const movement of movements) {
     const quantity = requirePositiveInteger(movement.quantity);
@@ -397,6 +427,30 @@ export async function allocateTransactionInventoryMovements(
         movement.partId,
         condition,
       );
+      const candidateZones = new Set(candidates.map((candidate) => candidate.zoneId || ''));
+      for (const delta of startingDeltas.values()) {
+        if (
+          delta.warehouseId !== movement.fromWarehouseId ||
+          delta.partId !== movement.partId ||
+          delta.condition !== condition
+        ) {
+          continue;
+        }
+
+        const zoneKey = delta.zoneId || '';
+        const candidate = candidates.find((item) => (item.zoneId || '') === zoneKey);
+        if (candidate) {
+          candidate.available += delta.quantityDelta;
+        } else if (delta.quantityDelta > 0 && !candidateZones.has(zoneKey)) {
+          candidates.push({ zoneId: delta.zoneId, available: delta.quantityDelta });
+          candidateZones.add(zoneKey);
+        }
+      }
+      candidates.sort((a, b) => {
+        if (!a.zoneId && b.zoneId) return -1;
+        if (a.zoneId && !b.zoneId) return 1;
+        return (a.zoneId || '').localeCompare(b.zoneId || '');
+      });
       candidateCache.set(cacheKey, candidates);
     }
 
@@ -823,39 +877,10 @@ export async function applyInventoryMovement(
   return { id, idempotent: false };
 }
 
-export async function reverseInventoryMovement(
-  db: D1Database,
-  movementId: string,
-  ownership: ScopeValues,
-  options: {
-    createdBy?: string | null;
-    createdAt?: string | null;
-    notes?: string | null;
-    idempotencyKey?: string | null;
-  } = {},
-): Promise<AppliedInventoryMovement> {
-  requireScopedOwnership(ownership);
-  const scoped = ownershipClause(ownership, 'm');
-
-  const existingReversal = await db.prepare(`
-    SELECT id FROM inventory_movements m
-    WHERE m.reversal_of_movement_id = ? AND ${scoped.clause}
-    LIMIT 1
-  `).bind(movementId, ...scoped.params).first<{ id: string }>();
-  if (existingReversal) return { id: existingReversal.id, idempotent: true };
-
-  const movement = await db.prepare(`
-    SELECT
-      m.id, m.from_warehouse_id, m.from_zone_id, m.to_warehouse_id, m.to_zone_id,
-      m.part_id, m.quantity, m.movement_type, m.reference, m.notes, m.created_by,
-      m.tenant_id, m.company_id, m.transaction_id, m.transaction_item_id,
-      m.condition, m.sync_source, m.sync_version, m.effective_at
-    FROM inventory_movements m
-    WHERE m.id = ? AND ${scoped.clause}
-  `).bind(movementId, ...scoped.params).first<InventoryMovementRow>();
-
-  if (!movement) throw new InventorySyncError('Movement not found', 'MOVEMENT_NOT_FOUND', 404);
-
+function reversalInputFromMovement(
+  movement: InventoryMovementRow,
+  options: ReversalOptions = {},
+): InventoryMovementInput {
   const condition = normalizeInventoryCondition(movement.condition);
   let reversal: InventoryMovementInput;
 
@@ -929,7 +954,8 @@ export async function reverseInventoryMovement(
     throw new InventorySyncError('Movement cannot be reversed because it has no warehouse endpoint', 'MOVEMENT_NOT_REVERSIBLE');
   }
 
-  return applyInventoryMovement(db, {
+  const prefix = options.idempotencyPrefix || 'reversal';
+  return {
     ...reversal,
     reference: movement.reference || `Reversal of ${movement.id}`,
     notes: options.notes || `Reversal of movement ${movement.id}`,
@@ -938,10 +964,74 @@ export async function reverseInventoryMovement(
     transactionId: movement.transaction_id,
     transactionItemId: movement.transaction_item_id,
     syncSource: 'reversal',
-    syncVersion: movement.sync_version || 0,
+    syncVersion: options.syncVersion ?? movement.sync_version ?? 0,
     reversalOfMovementId: movement.id,
-    idempotencyKey: options.idempotencyKey || `reversal:${movement.id}`,
+    idempotencyKey: `${prefix}:${movement.id}`,
     effectiveAt: movement.effective_at,
+  };
+}
+
+export async function buildTransactionReversalMovements(
+  db: D1Database,
+  transactionId: string,
+  ownership: ScopeValues,
+  options: ReversalOptions = {},
+): Promise<InventoryMovementInput[]> {
+  requireScopedOwnership(ownership);
+  const scoped = ownershipClause(ownership, 'm');
+  const { results } = await db.prepare(`
+    SELECT
+      m.id, m.from_warehouse_id, m.from_zone_id, m.to_warehouse_id, m.to_zone_id,
+      m.part_id, m.quantity, m.movement_type, m.reference, m.notes, m.created_by,
+      m.tenant_id, m.company_id, m.transaction_id, m.transaction_item_id,
+      m.condition, m.sync_source, m.sync_version, m.effective_at
+    FROM inventory_movements m
+    WHERE m.transaction_id = ?
+      AND m.sync_source IN ('transaction', 'backfill')
+      AND m.reversal_of_movement_id IS NULL
+      AND ${scoped.clause}
+      AND NOT EXISTS (
+        SELECT 1 FROM inventory_movements r
+        WHERE r.reversal_of_movement_id = m.id
+      )
+    ORDER BY m.created_at, m.id
+  `).bind(transactionId, ...scoped.params).all<InventoryMovementRow>();
+
+  return (results || []).map((movement) => reversalInputFromMovement(movement, options));
+}
+
+export async function reverseInventoryMovement(
+  db: D1Database,
+  movementId: string,
+  ownership: ScopeValues,
+  options: ReversalOptions & { idempotencyKey?: string | null } = {},
+): Promise<AppliedInventoryMovement> {
+  requireScopedOwnership(ownership);
+  const scoped = ownershipClause(ownership, 'm');
+
+  const existingReversal = await db.prepare(`
+    SELECT id FROM inventory_movements m
+    WHERE m.reversal_of_movement_id = ? AND ${scoped.clause}
+    LIMIT 1
+  `).bind(movementId, ...scoped.params).first<{ id: string }>();
+  if (existingReversal) return { id: existingReversal.id, idempotent: true };
+
+  const movement = await db.prepare(`
+    SELECT
+      m.id, m.from_warehouse_id, m.from_zone_id, m.to_warehouse_id, m.to_zone_id,
+      m.part_id, m.quantity, m.movement_type, m.reference, m.notes, m.created_by,
+      m.tenant_id, m.company_id, m.transaction_id, m.transaction_item_id,
+      m.condition, m.sync_source, m.sync_version, m.effective_at
+    FROM inventory_movements m
+    WHERE m.id = ? AND ${scoped.clause}
+  `).bind(movementId, ...scoped.params).first<InventoryMovementRow>();
+
+  if (!movement) throw new InventorySyncError('Movement not found', 'MOVEMENT_NOT_FOUND', 404);
+
+  const reversal = reversalInputFromMovement(movement, options);
+  return applyInventoryMovement(db, {
+    ...reversal,
+    idempotencyKey: options.idempotencyKey || reversal.idempotencyKey,
   }, ownership);
 }
 

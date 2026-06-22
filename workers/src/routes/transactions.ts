@@ -11,9 +11,11 @@ import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWher
 import {
   allocateTransactionInventoryMovements,
   buildTransactionInventoryMovements,
+  buildTransactionReversalMovements,
   InventorySyncError,
   prepareInventoryMovementBatch,
   preflightInventoryMovements,
+  type TransactionInventoryItemInput,
   type TransactionMovementType,
 } from '../services/inventorySync';
 
@@ -32,6 +34,40 @@ interface PreparedLineItem {
   sourceWarehouseId: string | null;
   destinationWarehouseId: string | null;
   notes: string | null;
+}
+
+interface TransactionUpdateRow {
+  id: string;
+  date: string;
+  movement_type: TransactionMovementType;
+  quantity: number;
+  unit_price_usd: number;
+  vendor: string | null;
+  part_id: string | null;
+  serial_number: string | null;
+  condition: string | null;
+  po_number: string | null;
+  po_file_key: string | null;
+  po_file_name: string | null;
+  market_id: string | null;
+  source_warehouse_id: string | null;
+  destination_warehouse_id: string | null;
+  project_id: string | null;
+  contact_id: string | null;
+  tenant_id: string | null;
+  company_id: string | null;
+  inventory_sync_status: string;
+  inventory_sync_version: number;
+  inventory_sync_error: string | null;
+}
+
+interface StoredLineItem {
+  id: string;
+  part_id: string | null;
+  condition: string | null;
+  quantity: number;
+  source_warehouse_id: string | null;
+  destination_warehouse_id: string | null;
 }
 
 interface ScopeValues {
@@ -324,6 +360,28 @@ function lineItemInsertStatement(
   );
 }
 
+function preparedLineItemsForSync(lineItems: PreparedLineItem[]): TransactionInventoryItemInput[] {
+  return lineItems.map((item) => ({
+    id: item.id,
+    partId: item.partId,
+    quantity: item.quantity,
+    condition: item.condition,
+    sourceWarehouseId: item.sourceWarehouseId,
+    destinationWarehouseId: item.destinationWarehouseId,
+  }));
+}
+
+function storedLineItemsForSync(lineItems: StoredLineItem[]): TransactionInventoryItemInput[] {
+  return lineItems.map((item) => ({
+    id: item.id,
+    partId: item.part_id,
+    quantity: item.quantity,
+    condition: item.condition,
+    sourceWarehouseId: item.source_warehouse_id,
+    destinationWarehouseId: item.destination_warehouse_id,
+  }));
+}
+
 const TRANSACTION_FROM = `
   FROM transactions t
   LEFT JOIN parts p ON t.part_id = p.id
@@ -336,6 +394,7 @@ const TRANSACTION_FROM = `
   LEFT JOIN (
     SELECT transaction_id, COUNT(*) AS item_count
     FROM transaction_items
+    WHERE superseded_at IS NULL
     GROUP BY transaction_id
   ) ti ON ti.transaction_id = t.id
 `;
@@ -478,7 +537,9 @@ transactionsRoutes.get('/items/:transactionId', requirePermission(Permission.VIE
       LEFT JOIN parts p ON ti.part_id = p.id
       LEFT JOIN warehouses sw ON ti.source_warehouse_id = sw.id
       LEFT JOIN warehouses dw ON ti.destination_warehouse_id = dw.id
-      WHERE ti.transaction_id = ? AND ${scopeWhere.clause.replaceAll('tenant_id', 'ti.tenant_id').replaceAll('company_id', 'ti.company_id')}
+      WHERE ti.transaction_id = ?
+        AND ti.superseded_at IS NULL
+        AND ${scopeWhere.clause.replaceAll('tenant_id', 'ti.tenant_id').replaceAll('company_id', 'ti.company_id')}
       ORDER BY ti.created_at, ti.id
     `).bind(transactionId, ...scopeWhere.params).all();
 
@@ -890,23 +951,41 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
-    const ownership = scopeInsertValues(scope, user);
+    const requestOwnership = scopeInsertValues(scope, user);
     const id = c.req.param('id')!;
     const body = await c.req.json<IncomingBody>();
 
     const existing = await c.env.DB.prepare(`
-      SELECT id, part_id, vendor, source_warehouse_id, destination_warehouse_id
+      SELECT
+        id, date, movement_type, quantity, unit_price_usd, vendor, part_id,
+        serial_number, condition, po_number, po_file_key, po_file_name,
+        market_id, source_warehouse_id, destination_warehouse_id,
+        project_id, contact_id, tenant_id, company_id,
+        inventory_sync_status, inventory_sync_version, inventory_sync_error
       FROM transactions
       WHERE id = ? AND ${scopeWhere.clause}
-    `).bind(id, ...scopeWhere.params).first<{
-      id: string;
-      part_id: string | null;
-      vendor: string | null;
-      source_warehouse_id: string | null;
-      destination_warehouse_id: string | null;
-    }>();
+    `).bind(id, ...scopeWhere.params).first<TransactionUpdateRow>();
     if (!existing) return c.json({ success: false, error: 'Transaction not found' }, 404);
 
+    const transactionOwnership: ScopeValues = {
+      tenantId: existing.tenant_id || requestOwnership.tenantId,
+      companyId: existing.company_id || requestOwnership.companyId,
+    };
+    const lineItemScope = ownershipClause(transactionOwnership, 'ti');
+    const { results: existingLineItemRows } = await c.env.DB.prepare(`
+      SELECT
+        ti.id, ti.part_id, ti.condition, ti.quantity,
+        ti.source_warehouse_id, ti.destination_warehouse_id
+      FROM transaction_items ti
+      WHERE ti.transaction_id = ?
+        AND ti.superseded_at IS NULL
+        AND ${lineItemScope.clause}
+      ORDER BY ti.created_at, ti.id
+    `).bind(id, ...lineItemScope.params).all<StoredLineItem>();
+    const existingLineItems = existingLineItemRows || [];
+
+    const next = { ...existing };
+    const nextValues = next as unknown as Record<string, SQLValue>;
     const sets: string[] = [];
     const params: SQLValue[] = [];
     const touchedColumns = new Set<string>();
@@ -915,6 +994,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       sets.push(`${column} = ?`);
       params.push(value);
       touchedColumns.add(column);
+      nextValues[column] = value;
     };
 
     if (Object.prototype.hasOwnProperty.call(body, 'date')) {
@@ -924,7 +1004,9 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     }
 
     const movementRaw = firstDefined(body, ['movement_type', 'movementType']);
-    if (movementRaw !== undefined) setColumn('movement_type', requireMovementType(movementRaw));
+    if (movementRaw !== undefined) {
+      setColumn('movement_type', requireMovementType(movementRaw) as TransactionMovementType);
+    }
 
     const quantityRaw = firstDefined(body, ['quantity', 'qty']);
     if (quantityRaw !== undefined) {
@@ -942,10 +1024,16 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
 
     const partWasProvided =
       firstDefined(body, ['part_id', 'partId', 'part_number', 'partNumber']) !== undefined;
-    let currentPartId = existing.part_id;
     if (partWasProvided) {
-      currentPartId = await resolvePart(c.env.DB, body, firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor, ownership);
-      setColumn('part_id', currentPartId);
+      const createMissingParts = next.movement_type === 'Purchase';
+      const partId = await resolvePart(
+        c.env.DB,
+        body,
+        firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor,
+        transactionOwnership,
+        createMissingParts,
+      );
+      setColumn('part_id', partId);
     }
 
     const simpleTextFields: Array<[string[], string]> = [
@@ -964,32 +1052,33 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     }
 
     const marketRaw = firstDefined(body, ['market_id', 'marketId']);
-    if (marketRaw !== undefined) setColumn('market_id', await validateMarket(c.env.DB, marketRaw, false, ownership));
+    if (marketRaw !== undefined) setColumn('market_id', await validateMarket(c.env.DB, marketRaw, false, transactionOwnership));
 
     const sourceWarehouseRaw = firstDefined(body, ['source_warehouse_id', 'sourceWarehouseId']);
-    let sourceWarehouseId = existing.source_warehouse_id;
     if (sourceWarehouseRaw !== undefined) {
-      sourceWarehouseId = await validateWarehouse(c.env.DB, sourceWarehouseRaw, 'Source', ownership);
+      const sourceWarehouseId = await validateWarehouse(c.env.DB, sourceWarehouseRaw, 'Source', transactionOwnership);
       setColumn('source_warehouse_id', sourceWarehouseId);
     }
 
     const destinationWarehouseRaw = firstDefined(body, ['destination_warehouse_id', 'destinationWarehouseId']);
-    let destinationWarehouseId = existing.destination_warehouse_id;
     if (destinationWarehouseRaw !== undefined) {
-      destinationWarehouseId = await validateWarehouse(c.env.DB, destinationWarehouseRaw, 'Destination', ownership);
+      const destinationWarehouseId = await validateWarehouse(c.env.DB, destinationWarehouseRaw, 'Destination', transactionOwnership);
       setColumn('destination_warehouse_id', destinationWarehouseId);
     }
 
     const contactRaw = firstDefined(body, ['contact_id', 'contactId']);
-    if (contactRaw !== undefined) setColumn('contact_id', await validateContact(c.env.DB, contactRaw, ownership));
+    if (contactRaw !== undefined) setColumn('contact_id', await validateContact(c.env.DB, contactRaw, transactionOwnership));
 
-    const lineItems = await prepareLineItems(
-      c.env.DB,
-      body,
-      firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor,
-      ownership,
-    );
     const shouldReplaceLineItems = incomingItems(body).length > 0;
+    const lineItems = shouldReplaceLineItems
+      ? await prepareLineItems(
+        c.env.DB,
+        body,
+        firstDefined(body, ['vendor', 'companyName']) ?? next.vendor,
+        transactionOwnership,
+        next.movement_type === 'Purchase',
+      )
+      : [];
 
     if (shouldReplaceLineItems) {
       const itemQuantity = lineItems.reduce((sum, item) => sum + item.quantity, 0);
@@ -1004,24 +1093,138 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       return c.json({ success: false, error: 'No fields to update' }, 400);
     }
 
-    if (sets.length > 0) {
-      setColumn('updated_at', new Date().toISOString());
-      await c.env.DB.prepare(`UPDATE transactions SET ${sets.join(', ')} WHERE id = ? AND ${scopeWhere.clause}`)
-        .bind(...params, id, ...scopeWhere.params)
-        .run();
+    const activeSyncItems = shouldReplaceLineItems
+      ? preparedLineItemsForSync(lineItems)
+      : storedLineItemsForSync(existingLineItems);
+    const syncUsesLineItems = activeSyncItems.length > 0;
+    const syncAffectingColumns = new Set<string>(['date', 'movement_type']);
+    if (!syncUsesLineItems) {
+      syncAffectingColumns.add('part_id');
+      syncAffectingColumns.add('quantity');
+      syncAffectingColumns.add('condition');
+      syncAffectingColumns.add('source_warehouse_id');
+      syncAffectingColumns.add('destination_warehouse_id');
     }
+    const syncAffectingUpdate = shouldReplaceLineItems
+      || [...syncAffectingColumns].some((column) => touchedColumns.has(column));
+
+    const wasSynced = existing.inventory_sync_status === 'synced';
+    const now = new Date().toISOString();
+    let inventorySyncStatus = existing.inventory_sync_status;
+    let inventorySyncError = existing.inventory_sync_error;
+    let inventorySyncVersion = existing.inventory_sync_version || 0;
+    let inventorySyncedAt: string | null | undefined;
+    let inventoryBatch: { statements: D1PreparedStatement[] } = { statements: [] };
+
+    if (syncAffectingUpdate) {
+      const targetSyncVersion = wasSynced || inventorySyncStatus !== 'synced'
+        ? inventorySyncVersion + 1
+        : inventorySyncVersion;
+      const syncPlan = buildTransactionInventoryMovements({
+        id,
+        movementType: next.movement_type,
+        date: next.date,
+        partId: next.part_id,
+        quantity: next.quantity,
+        condition: next.condition,
+        sourceWarehouseId: next.source_warehouse_id,
+        destinationWarehouseId: next.destination_warehouse_id,
+        syncVersion: targetSyncVersion,
+        syncSource: 'transaction',
+        items: activeSyncItems,
+      });
+
+      const reversalMovements = wasSynced
+        ? await buildTransactionReversalMovements(c.env.DB, id, transactionOwnership, {
+          createdBy: user.id,
+          createdAt: now,
+          syncVersion: targetSyncVersion,
+          idempotencyPrefix: `reversal:update:${id}:v${targetSyncVersion}`,
+        })
+        : [];
+
+      if (syncPlan.ready) {
+        const allocatedSyncMovements = await allocateTransactionInventoryMovements(
+          c.env.DB,
+          syncPlan.movements,
+          transactionOwnership,
+          { startingMovements: reversalMovements },
+        );
+        inventoryBatch = await prepareInventoryMovementBatch(
+          c.env.DB,
+          [...reversalMovements, ...allocatedSyncMovements].map((movement) => ({
+            ...movement,
+            createdBy: movement.createdBy || user.id,
+            createdAt: movement.createdAt || now,
+          })),
+          transactionOwnership,
+        );
+
+        inventorySyncStatus = 'synced';
+        inventorySyncVersion = targetSyncVersion;
+        inventorySyncedAt = now;
+        inventorySyncError = null;
+      } else if (wasSynced) {
+        inventoryBatch = await prepareInventoryMovementBatch(
+          c.env.DB,
+          reversalMovements.map((movement) => ({
+            ...movement,
+            createdBy: movement.createdBy || user.id,
+            createdAt: movement.createdAt || now,
+          })),
+          transactionOwnership,
+        );
+
+        inventorySyncStatus = 'not_ready';
+        inventorySyncVersion = targetSyncVersion;
+        inventorySyncedAt = null;
+        inventorySyncError = syncPlan.reason || 'Transaction is not ready for inventory sync';
+      } else {
+        inventorySyncStatus = 'not_ready';
+        inventorySyncError = syncPlan.reason || 'Transaction is not ready for inventory sync';
+      }
+
+      setColumn('inventory_sync_status', inventorySyncStatus);
+      setColumn('inventory_sync_version', inventorySyncVersion);
+      setColumn('inventory_synced_at', inventorySyncedAt === undefined ? null : inventorySyncedAt);
+      setColumn('inventory_sync_error', inventorySyncError);
+    }
+
+    setColumn('updated_at', now);
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(`UPDATE transactions SET ${sets.join(', ')} WHERE id = ? AND ${scopeWhere.clause}`)
+        .bind(...params, id, ...scopeWhere.params),
+    ];
 
     if (shouldReplaceLineItems) {
-      const now = new Date().toISOString();
-      await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
-      await insertLineItems(c.env.DB, id, lineItems, now, ownership);
+      statements.push(c.env.DB.prepare(`
+        UPDATE transaction_items
+        SET superseded_at = ?, updated_at = ?
+        WHERE transaction_id = ?
+          AND superseded_at IS NULL
+          AND ${lineItemScope.clause}
+      `).bind(now, now, id, ...lineItemScope.params));
+      for (const item of lineItems) {
+        statements.push(lineItemInsertStatement(c.env.DB, id, item, now, transactionOwnership));
+      }
     }
+    statements.push(...inventoryBatch.statements);
+
+    await c.env.DB.batch(statements);
 
     await logAudit(c.env.DB, user.id, 'UPDATE_TRANSACTION', 'transactions', id);
-    return c.json({ success: true });
+    return c.json({
+      success: true,
+      inventorySyncStatus,
+      inventorySyncError,
+    });
   } catch (err) {
     if (err instanceof ValidationError) {
       return c.json({ success: false, error: err.message }, 400);
+    }
+    if (err instanceof InventorySyncError) {
+      const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
+      return c.json({ success: false, error: err.message, code: err.code }, status);
     }
     console.error('PUT /transactions/:id error:', err);
     return c.json({ success: false, error: 'Failed to update transaction' }, 500);
