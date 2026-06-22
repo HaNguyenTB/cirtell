@@ -93,6 +93,23 @@ interface InventoryMovementRow {
   effective_at: string | null;
 }
 
+interface PreparedMovement {
+  id: string;
+  input: InventoryMovementInput;
+  movementType: InventoryMovementType;
+  quantity: number;
+  condition: InventoryCondition;
+  now: string;
+}
+
+interface InventoryDelta {
+  warehouseId: string;
+  zoneId: string | null;
+  partId: string;
+  condition: InventoryCondition;
+  quantityDelta: number;
+}
+
 const INVENTORY_CONDITIONS: InventoryCondition[] = ['New', 'Good', 'Fair', 'Poor', 'Scrap'];
 const INVENTORY_MOVEMENT_TYPES: InventoryMovementType[] = ['Receive', 'Ship', 'Transfer', 'Adjust'];
 
@@ -290,6 +307,254 @@ async function existingMovementByIdempotencyKey(
     LIMIT 1
   `).bind(idempotencyKey, ...scoped.params).first<{ id: string }>();
   return existing || null;
+}
+
+function inventoryDeltaKey(
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+): string {
+  return [warehouseId, zoneId || '', partId, condition].join('\u001f');
+}
+
+function addInventoryDelta(
+  deltas: Map<string, InventoryDelta>,
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+  quantityDelta: number,
+): void {
+  const key = inventoryDeltaKey(warehouseId, zoneId, partId, condition);
+  const existing = deltas.get(key);
+  if (existing) {
+    existing.quantityDelta += quantityDelta;
+    return;
+  }
+  deltas.set(key, {
+    warehouseId,
+    zoneId: zoneId || null,
+    partId,
+    condition,
+    quantityDelta,
+  });
+}
+
+async function prepareMovementForApply(
+  db: D1Database,
+  input: InventoryMovementInput,
+  ownership: ScopeValues,
+): Promise<PreparedMovement | null> {
+  const existing = await existingMovementByIdempotencyKey(db, ownership, input.idempotencyKey);
+  if (existing) return null;
+
+  const movementType = normalizeMovementType(input.movementType);
+  const normalizedInput = { ...input, movementType };
+  const quantity = requirePositiveInteger(input.quantity);
+  const condition = normalizeInventoryCondition(input.condition);
+
+  validateEndpoints(normalizedInput);
+  await validatePart(db, input.partId, ownership);
+  await validateWarehouse(db, input.fromWarehouseId, 'Source', ownership);
+  await validateWarehouse(db, input.toWarehouseId, 'Destination', ownership);
+  await validateZone(db, input.fromZoneId, input.fromWarehouseId, 'Source', ownership);
+  await validateZone(db, input.toZoneId, input.toWarehouseId, 'Destination', ownership);
+
+  return {
+    id: crypto.randomUUID(),
+    input: normalizedInput,
+    movementType,
+    quantity,
+    condition,
+    now: input.createdAt || new Date().toISOString(),
+  };
+}
+
+async function inventoryDeltasForMovements(
+  db: D1Database,
+  inputs: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<{ prepared: PreparedMovement[]; deltas: Map<string, InventoryDelta>; idempotent: AppliedInventoryMovement[] }> {
+  requireScopedOwnership(ownership);
+
+  const prepared: PreparedMovement[] = [];
+  const idempotent: AppliedInventoryMovement[] = [];
+  const deltas = new Map<string, InventoryDelta>();
+
+  for (const input of inputs) {
+    const existing = await existingMovementByIdempotencyKey(db, ownership, input.idempotencyKey);
+    if (existing) {
+      idempotent.push({ id: existing.id, idempotent: true });
+      continue;
+    }
+
+    const movement = await prepareMovementForApply(db, input, ownership);
+    if (!movement) continue;
+    prepared.push(movement);
+
+    if (movement.input.fromWarehouseId) {
+      addInventoryDelta(
+        deltas,
+        movement.input.fromWarehouseId,
+        movement.input.fromZoneId,
+        movement.input.partId,
+        movement.condition,
+        -movement.quantity,
+      );
+    }
+    if (movement.input.toWarehouseId) {
+      addInventoryDelta(
+        deltas,
+        movement.input.toWarehouseId,
+        movement.input.toZoneId,
+        movement.input.partId,
+        movement.condition,
+        movement.quantity,
+      );
+    }
+  }
+
+  return { prepared, deltas, idempotent };
+}
+
+async function assertInventoryDeltasAvailable(
+  db: D1Database,
+  ownership: ScopeValues,
+  deltas: Map<string, InventoryDelta>,
+): Promise<void> {
+  for (const delta of deltas.values()) {
+    if (delta.quantityDelta >= 0) continue;
+
+    const row = await findInventoryRow(
+      db,
+      ownership,
+      delta.warehouseId,
+      delta.zoneId,
+      delta.partId,
+      delta.condition,
+    );
+    const currentQuantity = row?.quantity || 0;
+    if (currentQuantity + delta.quantityDelta < 0) {
+      throw new InsufficientStockError(
+        `Insufficient stock for part ${delta.partId} in source warehouse`,
+      );
+    }
+  }
+}
+
+export async function preflightInventoryMovements(
+  db: D1Database,
+  inputs: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<void> {
+  const { deltas } = await inventoryDeltasForMovements(db, inputs, ownership);
+  await assertInventoryDeltasAvailable(db, ownership, deltas);
+}
+
+export async function applyInventoryMovements(
+  db: D1Database,
+  inputs: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<AppliedInventoryMovement[]> {
+  const { prepared, deltas, idempotent } = await inventoryDeltasForMovements(db, inputs, ownership);
+  if (prepared.length === 0) return idempotent;
+
+  await assertInventoryDeltasAvailable(db, ownership, deltas);
+
+  const statements: D1PreparedStatement[] = [];
+  const updateNow = new Date().toISOString();
+
+  for (const delta of deltas.values()) {
+    if (delta.quantityDelta === 0) continue;
+
+    const row = await findInventoryRow(
+      db,
+      ownership,
+      delta.warehouseId,
+      delta.zoneId,
+      delta.partId,
+      delta.condition,
+    );
+
+    if (row) {
+      statements.push(
+        db.prepare('UPDATE inventory SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
+          .bind(delta.quantityDelta, updateNow, row.id),
+      );
+    } else if (delta.quantityDelta > 0) {
+      statements.push(
+        db.prepare(`
+          INSERT INTO inventory (id, tenant_id, company_id, warehouse_id, zone_id, part_id, quantity, condition, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          crypto.randomUUID(),
+          ownership.tenantId,
+          ownership.companyId,
+          delta.warehouseId,
+          delta.zoneId,
+          delta.partId,
+          delta.quantityDelta,
+          delta.condition,
+          updateNow,
+        ),
+      );
+    } else {
+      throw new InsufficientStockError(`Insufficient stock for part ${delta.partId} in source warehouse`);
+    }
+  }
+
+  for (const movement of prepared) {
+    statements.push(
+      db.prepare(`
+        INSERT INTO inventory_movements (
+          id, from_warehouse_id, from_zone_id, to_warehouse_id, to_zone_id,
+          part_id, tenant_id, company_id, quantity, movement_type, condition,
+          reference, notes, created_by, created_at,
+          transaction_id, transaction_item_id, sync_source, sync_version,
+          reversal_of_movement_id, idempotency_key, effective_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        movement.id,
+        movement.input.fromWarehouseId || null,
+        movement.input.fromZoneId || null,
+        movement.input.toWarehouseId || null,
+        movement.input.toZoneId || null,
+        movement.input.partId,
+        ownership.tenantId,
+        ownership.companyId,
+        movement.quantity,
+        movement.movementType,
+        movement.condition,
+        movement.input.reference || null,
+        movement.input.notes || null,
+        movement.input.createdBy || null,
+        movement.now,
+        movement.input.transactionId || null,
+        movement.input.transactionItemId || null,
+        movement.input.syncSource || 'manual',
+        movement.input.syncVersion ?? 0,
+        movement.input.reversalOfMovementId || null,
+        movement.input.idempotencyKey || null,
+        movement.input.effectiveAt || null,
+      ),
+    );
+  }
+
+  try {
+    await db.batch(statements);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.toLowerCase().includes('check constraint')) {
+      throw new InsufficientStockError();
+    }
+    throw err;
+  }
+
+  return [
+    ...idempotent,
+    ...prepared.map((movement) => ({ id: movement.id, idempotent: false })),
+  ];
 }
 
 async function applyDestinationIncrement(
@@ -572,8 +837,9 @@ function requiredWarehouseReason(
 export function buildTransactionInventoryMovements(
   transaction: TransactionInventoryInput,
 ): TransactionInventoryBuildResult {
-  const rows = transaction.items && transaction.items.length > 0
-    ? transaction.items
+  const usesLineItems = !!transaction.items && transaction.items.length > 0;
+  const rows: TransactionInventoryItemInput[] = usesLineItems
+    ? transaction.items!
     : [{
       id: null,
       partId: transaction.partId || null,
@@ -593,8 +859,8 @@ export function buildTransactionInventoryMovements(
       return { ready: false, reason: 'Transaction item requires positive quantity', movements: [] };
     }
 
-    const sourceWarehouseId = row.sourceWarehouseId || transaction.sourceWarehouseId || null;
-    const destinationWarehouseId = row.destinationWarehouseId || transaction.destinationWarehouseId || null;
+    const sourceWarehouseId = row.sourceWarehouseId || null;
+    const destinationWarehouseId = row.destinationWarehouseId || null;
     const warehouseReason = requiredWarehouseReason(
       transaction.movementType,
       sourceWarehouseId,

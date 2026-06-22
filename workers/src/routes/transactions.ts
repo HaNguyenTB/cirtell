@@ -8,6 +8,13 @@ import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
+import {
+  applyInventoryMovements,
+  buildTransactionInventoryMovements,
+  InventorySyncError,
+  preflightInventoryMovements,
+  type TransactionMovementType,
+} from '../services/inventorySync';
 
 type Variables = { user: User };
 type SQLValue = string | number | null;
@@ -15,6 +22,7 @@ type SQLValue = string | number | null;
 type IncomingBody = Record<string, unknown>;
 
 interface PreparedLineItem {
+  id: string;
   partId: string | null;
   serialNumber: string | null;
   condition: string | null;
@@ -129,6 +137,7 @@ async function resolvePart(
   input: IncomingBody,
   fallbackVendor: unknown,
   ownership: ScopeValues,
+  createIfMissing = true,
 ): Promise<string | null> {
   const ownerWhere = ownershipClause(ownership);
   const explicitPartId = normalizeText(firstDefined(input, ['part_id', 'partId']));
@@ -147,6 +156,7 @@ async function resolvePart(
     `SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?) AND ${ownerWhere.clause}`,
   ).bind(partNumber, ...ownerWhere.params).first<{ id: string }>();
   if (existing) return existing.id;
+  if (!createIfMissing) return null;
 
   const vendorId = await findOrCreateVendor(db, firstDefined(input, ['vendor', 'companyName']) ?? fallbackVendor);
   const now = new Date().toISOString();
@@ -226,11 +236,9 @@ function incomingItems(body: IncomingBody): IncomingBody[] {
 async function prepareLineItems(
   db: D1Database,
   body: IncomingBody,
-  fallbackPartId: string | null,
   fallbackVendor: unknown,
-  fallbackSourceWarehouseId: string | null,
-  fallbackDestinationWarehouseId: string | null,
   ownership: ScopeValues,
+  createMissingParts = true,
 ): Promise<PreparedLineItem[]> {
   const items = incomingItems(body);
   const prepared: PreparedLineItem[] = [];
@@ -245,19 +253,20 @@ async function prepareLineItems(
 
     const sourceWarehouseId = await validateWarehouse(
       db,
-      firstDefined(item, ['source_warehouse_id', 'sourceWarehouseId']) ?? fallbackSourceWarehouseId,
+      firstDefined(item, ['source_warehouse_id', 'sourceWarehouseId']),
       'Source',
       ownership,
     );
     const destinationWarehouseId = await validateWarehouse(
       db,
-      firstDefined(item, ['destination_warehouse_id', 'destinationWarehouseId']) ?? fallbackDestinationWarehouseId,
+      firstDefined(item, ['destination_warehouse_id', 'destinationWarehouseId']),
       'Destination',
       ownership,
     );
 
     prepared.push({
-      partId: await resolvePart(db, item, fallbackVendor, ownership) || fallbackPartId,
+      id: crypto.randomUUID(),
+      partId: await resolvePart(db, item, fallbackVendor, ownership, createMissingParts),
       serialNumber: normalizeText(firstDefined(item, ['serial_number', 'serialNumber'])),
       condition: normalizeText(firstDefined(item, ['condition'])),
       quantity,
@@ -286,7 +295,7 @@ async function insertLineItems(
         notes, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      crypto.randomUUID(),
+      item.id,
       ownership.tenantId,
       ownership.companyId,
       transactionId,
@@ -722,15 +731,14 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
     );
     const marketId = await validateMarket(c.env.DB, firstDefined(body, ['market_id', 'marketId']), true, ownership);
     const contactId = await validateContact(c.env.DB, firstDefined(body, ['contact_id', 'contactId']), ownership);
-    let partId = await resolvePart(c.env.DB, body, vendor, ownership);
+    const createMissingParts = movementType === 'Purchase';
+    let partId = await resolvePart(c.env.DB, body, vendor, ownership, createMissingParts);
     const lineItems = await prepareLineItems(
       c.env.DB,
       body,
-      partId,
       vendor,
-      sourceWarehouseId,
-      destinationWarehouseId,
       ownership,
+      createMissingParts,
     );
     if (!partId && lineItems.length > 0) partId = lineItems[0].partId;
 
@@ -753,6 +761,31 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const headerCondition = normalizeText(firstDefined(body, ['condition']));
+    const syncPlan = buildTransactionInventoryMovements({
+      id,
+      movementType: movementType as TransactionMovementType,
+      date,
+      partId,
+      quantity,
+      condition: headerCondition,
+      sourceWarehouseId,
+      destinationWarehouseId,
+      syncVersion: 1,
+      syncSource: 'transaction',
+      items: lineItems.map((item) => ({
+        id: item.id,
+        partId: item.partId,
+        quantity: item.quantity,
+        condition: item.condition,
+        sourceWarehouseId: item.sourceWarehouseId,
+        destinationWarehouseId: item.destinationWarehouseId,
+      })),
+    });
+
+    if (syncPlan.ready) {
+      await preflightInventoryMovements(c.env.DB, syncPlan.movements, ownership);
+    }
 
     await c.env.DB.prepare(`
       INSERT INTO transactions (
@@ -760,8 +793,9 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
         vendor, part_id, serial_number, condition,
         po_number, po_file_key, po_file_name,
         market_id, source_warehouse_id, destination_warehouse_id,
-        project_id, contact_id, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        project_id, contact_id, created_by, created_at, updated_at,
+        inventory_sync_status, inventory_sync_version, inventory_sync_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       ownership.tenantId,
@@ -773,7 +807,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       vendor,
       partId,
       normalizeText(firstDefined(body, ['serial_number', 'serialNumber'])),
-      normalizeText(firstDefined(body, ['condition'])),
+      headerCondition,
       normalizeText(firstDefined(body, ['po_number', 'poNumber'])),
       normalizeText(firstDefined(body, ['po_file_key', 'poFileKey'])),
       normalizeText(firstDefined(body, ['po_file_name', 'poFileName'])),
@@ -785,15 +819,54 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       user.id,
       now,
       now,
+      'not_ready',
+      0,
+      syncPlan.ready ? null : syncPlan.reason || 'Transaction is not ready for inventory sync',
     ).run();
 
     await insertLineItems(c.env.DB, id, lineItems, now, ownership);
+
+    let inventorySynced = false;
+    if (syncPlan.ready) {
+      try {
+        await applyInventoryMovements(c.env.DB, syncPlan.movements.map((movement) => ({
+          ...movement,
+          createdBy: user.id,
+          createdAt: now,
+        })), ownership);
+        inventorySynced = true;
+      } catch (syncErr) {
+        await c.env.DB.prepare('DELETE FROM transaction_items WHERE transaction_id = ?').bind(id).run();
+        await c.env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(id).run();
+        throw syncErr;
+      }
+
+      await c.env.DB.prepare(`
+        UPDATE transactions
+        SET inventory_sync_status = 'synced',
+            inventory_sync_version = ?,
+            inventory_synced_at = ?,
+            inventory_sync_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `).bind(1, now, now, id).run();
+    }
+
     await logAudit(c.env.DB, user.id, 'CREATE_TRANSACTION', 'transactions', id);
 
-    return c.json({ success: true, id }, 201);
+    return c.json({
+      success: true,
+      id,
+      inventorySyncStatus: inventorySynced ? 'synced' : 'not_ready',
+      inventorySyncError: syncPlan.ready ? null : syncPlan.reason || 'Transaction is not ready for inventory sync',
+    }, 201);
   } catch (err) {
     if (err instanceof ValidationError) {
       return c.json({ success: false, error: err.message }, 400);
+    }
+    if (err instanceof InventorySyncError) {
+      const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
+      return c.json({ success: false, error: err.message, code: err.code }, status);
     }
     console.error('POST /transactions error:', err);
     return c.json({ success: false, error: 'Failed to create transaction' }, 500);
@@ -904,10 +977,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     const lineItems = await prepareLineItems(
       c.env.DB,
       body,
-      currentPartId,
       firstDefined(body, ['vendor', 'companyName']) ?? existing.vendor,
-      sourceWarehouseId,
-      destinationWarehouseId,
       ownership,
     );
     const shouldReplaceLineItems = incomingItems(body).length > 0;
