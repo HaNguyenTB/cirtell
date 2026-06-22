@@ -8,6 +8,7 @@ import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
+import { applyInventoryMovement, InventorySyncError, type InventoryMovementType } from '../services/inventorySync';
 
 type Variables = { user: User };
 
@@ -225,7 +226,6 @@ warehouseRoutes.post('/inventory/move', requirePermission(Permission.EDIT_WAREHO
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
     const ownership = scopeInsertValues(scope, user);
-    const itemScope = scopedWhere(scope, 'tenant_id', 'company_id');
     const body = await c.req.json();
 
     if (!body.part_id || !body.quantity || !body.movement_type) {
@@ -239,79 +239,32 @@ warehouseRoutes.post('/inventory/move', requirePermission(Permission.EDIT_WAREHO
       return c.json({ success: false, error: `movement_type must be: ${validTypes.join(', ')}` }, 400);
     }
 
-    // Validate part exists
-    const part = await c.env.DB.prepare(`SELECT id FROM parts WHERE id = ? AND ${itemScope.clause}`)
-      .bind(body.part_id, ...itemScope.params)
-      .first();
-    if (!part) return c.json({ success: false, error: 'Part not found' }, 400);
+    const applied = await applyInventoryMovement(c.env.DB, {
+      movementType: body.movement_type as InventoryMovementType,
+      partId: body.part_id,
+      quantity: qty,
+      condition: body.condition,
+      fromWarehouseId: body.from_warehouse_id || null,
+      fromZoneId: body.from_zone_id || null,
+      toWarehouseId: body.to_warehouse_id || null,
+      toZoneId: body.to_zone_id || null,
+      reference: body.reference || null,
+      notes: body.notes || null,
+      createdBy: user.id,
+      syncSource: 'manual',
+      idempotencyKey: body.idempotency_key || null,
+      effectiveAt: body.effective_at || null,
+    }, ownership);
 
-    for (const warehouseId of [body.from_warehouse_id, body.to_warehouse_id].filter(Boolean)) {
-      const warehouse = await c.env.DB.prepare(`SELECT id FROM warehouses WHERE id = ? AND ${itemScope.clause}`)
-        .bind(warehouseId, ...itemScope.params)
-        .first();
-      if (!warehouse) return c.json({ success: false, error: 'Warehouse not found' }, 400);
+    if (!applied.idempotent) {
+      await logAudit(c.env.DB, user.id, 'INVENTORY_MOVE', 'inventory_movements', applied.id);
     }
-
-    // For Receive: to_warehouse_id required
-    // For Ship: from_warehouse_id required
-    // For Transfer: both required
-    if (body.movement_type === 'Receive' && !body.to_warehouse_id) {
-      return c.json({ success: false, error: 'to_warehouse_id is required for Receive' }, 400);
-    }
-    if (body.movement_type === 'Ship' && !body.from_warehouse_id) {
-      return c.json({ success: false, error: 'from_warehouse_id is required for Ship' }, 400);
-    }
-    if (body.movement_type === 'Transfer' && (!body.from_warehouse_id || !body.to_warehouse_id)) {
-      return c.json({ success: false, error: 'Both from/to warehouse required for Transfer' }, 400);
-    }
-
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
-    const condition = body.condition || 'Good';
-
-    // Record movement
-    await c.env.DB.prepare(`
-      INSERT INTO inventory_movements (id, from_warehouse_id, from_zone_id, to_warehouse_id, to_zone_id,
-        part_id, tenant_id, company_id, quantity, movement_type, reference, notes, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id, body.from_warehouse_id || null, body.from_zone_id || null,
-      body.to_warehouse_id || null, body.to_zone_id || null,
-      body.part_id, ownership.tenantId, ownership.companyId, qty, body.movement_type,
-      body.reference || null, body.notes || null, user.id, now,
-    ).run();
-
-    // Update inventory: decrement source
-    if (body.from_warehouse_id) {
-      await c.env.DB.prepare(`
-        UPDATE inventory SET quantity = MAX(quantity - ?, 0), updated_at = ?
-        WHERE warehouse_id = ? AND part_id = ? AND COALESCE(zone_id, '') = COALESCE(?, '')
-          AND condition = ? AND ${itemScope.clause}
-      `).bind(qty, now, body.from_warehouse_id, body.part_id, body.from_zone_id || '', condition, ...itemScope.params).run();
-    }
-
-    // Update inventory: increment destination
-    if (body.to_warehouse_id) {
-      const existing = await c.env.DB.prepare(`
-        SELECT id, quantity FROM inventory
-        WHERE warehouse_id = ? AND part_id = ? AND COALESCE(zone_id, '') = COALESCE(?, '')
-          AND condition = ? AND ${itemScope.clause}
-      `).bind(body.to_warehouse_id, body.part_id, body.to_zone_id || '', condition, ...itemScope.params).first<{ id: string; quantity: number }>();
-
-      if (existing) {
-        await c.env.DB.prepare('UPDATE inventory SET quantity = ?, updated_at = ? WHERE id = ?')
-          .bind(existing.quantity + qty, now, existing.id).run();
-      } else {
-        await c.env.DB.prepare(`
-          INSERT INTO inventory (id, tenant_id, company_id, warehouse_id, zone_id, part_id, quantity, condition, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(crypto.randomUUID(), ownership.tenantId, ownership.companyId, body.to_warehouse_id, body.to_zone_id || null, body.part_id, qty, condition, now).run();
-      }
-    }
-
-    await logAudit(c.env.DB, user.id, 'INVENTORY_MOVE', 'inventory_movements', id);
-    return c.json({ success: true, id }, 201);
+    return c.json({ success: true, id: applied.id, idempotent: applied.idempotent }, applied.idempotent ? 200 : 201);
   } catch (err: any) {
+    if (err instanceof InventorySyncError) {
+      const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
+      return c.json({ success: false, error: err.message, code: err.code }, status);
+    }
     console.error('POST /inventory/move error:', err);
     return c.json({ success: false, error: 'Failed to record movement' }, 500);
   }
