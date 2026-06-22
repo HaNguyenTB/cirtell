@@ -15,6 +15,7 @@ import {
   InventorySyncError,
   prepareInventoryMovementBatch,
   preflightInventoryMovements,
+  type InventoryMovementInput,
   type TransactionInventoryItemInput,
   type TransactionMovementType,
 } from '../services/inventorySync';
@@ -68,6 +69,27 @@ interface StoredLineItem {
   quantity: number;
   source_warehouse_id: string | null;
   destination_warehouse_id: string | null;
+}
+
+interface BackfillTransactionRow extends TransactionUpdateRow {
+  created_at: string;
+  voided_at: string | null;
+}
+
+type BackfillClassification =
+  | 'eligible'
+  | 'not_ready'
+  | 'insufficient_stock'
+  | 'double_count_risk';
+
+interface BackfillResult {
+  transactionId: string;
+  date: string;
+  createdAt: string;
+  classification: BackfillClassification;
+  reason: string | null;
+  movementCount: number;
+  applied?: boolean;
 }
 
 interface ScopeValues {
@@ -382,6 +404,201 @@ function storedLineItemsForSync(lineItems: StoredLineItem[]): TransactionInvento
   }));
 }
 
+async function loadActiveStoredLineItems(
+  db: D1Database,
+  transactionId: string,
+  ownership: ScopeValues,
+): Promise<StoredLineItem[]> {
+  const lineItemScope = ownershipClause(ownership, 'ti');
+  const { results } = await db.prepare(`
+    SELECT
+      ti.id, ti.part_id, ti.condition, ti.quantity,
+      ti.source_warehouse_id, ti.destination_warehouse_id
+    FROM transaction_items ti
+    WHERE ti.transaction_id = ?
+      AND ti.superseded_at IS NULL
+      AND ${lineItemScope.clause}
+    ORDER BY ti.created_at, ti.id
+  `).bind(transactionId, ...lineItemScope.params).all<StoredLineItem>();
+  return results || [];
+}
+
+function boolFromBody(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y'].includes(text)) return true;
+  if (['false', '0', 'no', 'n'].includes(text)) return false;
+  return fallback;
+}
+
+function idListFromBody(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => normalizeText(item)).filter((item): item is string => !!item);
+}
+
+function backfillIdempotencyMovements(movements: InventoryMovementInput[]): InventoryMovementInput[] {
+  const counters = new Map<string, number>();
+  return movements.map((movement) => {
+    if (movement.syncSource !== 'backfill' || !movement.transactionId) return movement;
+
+    const itemKey = movement.transactionItemId || 'header';
+    const baseKey = `backfill:${movement.transactionId}:${itemKey}`;
+    const chunk = counters.get(baseKey) || 0;
+    counters.set(baseKey, chunk + 1);
+    return {
+      ...movement,
+      idempotencyKey: `${baseKey}:${chunk}`,
+    };
+  });
+}
+
+function movementWarehouseRiskClause(movement: InventoryMovementInput): { clause: string; params: SQLValue[] } | null {
+  if (movement.movementType === 'Receive' && movement.toWarehouseId) {
+    return { clause: '(movement_type = ? AND to_warehouse_id = ?)', params: ['Receive', movement.toWarehouseId] };
+  }
+  if (movement.movementType === 'Ship' && movement.fromWarehouseId) {
+    return { clause: '(movement_type = ? AND from_warehouse_id = ?)', params: ['Ship', movement.fromWarehouseId] };
+  }
+  if (movement.movementType === 'Transfer' && movement.fromWarehouseId && movement.toWarehouseId) {
+    return {
+      clause: '(movement_type = ? AND from_warehouse_id = ? AND to_warehouse_id = ?)',
+      params: ['Transfer', movement.fromWarehouseId, movement.toWarehouseId],
+    };
+  }
+  return null;
+}
+
+async function hasManualDoubleCountRisk(
+  db: D1Database,
+  transaction: BackfillTransactionRow,
+  movements: InventoryMovementInput[],
+  ownership: ScopeValues,
+): Promise<boolean> {
+  const riskClauses: string[] = [];
+  const riskParams: SQLValue[] = [];
+  for (const movement of movements) {
+    const warehouseRisk = movementWarehouseRiskClause(movement);
+    if (!warehouseRisk) continue;
+    riskClauses.push(`(part_id = ? AND ${warehouseRisk.clause})`);
+    riskParams.push(movement.partId, ...warehouseRisk.params);
+  }
+  if (riskClauses.length === 0) return false;
+
+  const scoped = ownershipClause(ownership);
+  const row = await db.prepare(`
+    SELECT id
+    FROM inventory_movements
+    WHERE ${scoped.clause}
+      AND sync_source = 'manual'
+      AND DATE(created_at) = DATE(?)
+      AND (${riskClauses.join(' OR ')})
+    LIMIT 1
+  `).bind(...scoped.params, transaction.date, ...riskParams).first<{ id: string }>();
+  return !!row;
+}
+
+function transactionOwnership(
+  transaction: { tenant_id: string | null; company_id: string | null },
+  fallback: ScopeValues,
+): ScopeValues {
+  return {
+    tenantId: transaction.tenant_id || fallback.tenantId,
+    companyId: transaction.company_id || fallback.companyId,
+  };
+}
+
+async function buildBackfillCandidate(
+  db: D1Database,
+  transaction: BackfillTransactionRow,
+  ownership: ScopeValues,
+  startingMovements: InventoryMovementInput[],
+): Promise<{ result: BackfillResult; movements: InventoryMovementInput[] }> {
+  const lineItems = await loadActiveStoredLineItems(db, transaction.id, ownership);
+  const syncVersion = (transaction.inventory_sync_version || 0) + 1;
+  const syncPlan = buildTransactionInventoryMovements({
+    id: transaction.id,
+    movementType: transaction.movement_type,
+    date: transaction.date,
+    partId: transaction.part_id,
+    quantity: transaction.quantity,
+    condition: transaction.condition,
+    sourceWarehouseId: transaction.source_warehouse_id,
+    destinationWarehouseId: transaction.destination_warehouse_id,
+    syncVersion,
+    syncSource: 'backfill',
+    items: storedLineItemsForSync(lineItems),
+  });
+
+  if (!syncPlan.ready) {
+    return {
+      result: {
+        transactionId: transaction.id,
+        date: transaction.date,
+        createdAt: transaction.created_at,
+        classification: 'not_ready',
+        reason: syncPlan.reason || 'Transaction is not ready for inventory sync',
+        movementCount: 0,
+      },
+      movements: [],
+    };
+  }
+
+  try {
+    const doubleCountRisk = await hasManualDoubleCountRisk(db, transaction, syncPlan.movements, ownership);
+    const allocatedMovements = await allocateTransactionInventoryMovements(
+      db,
+      syncPlan.movements,
+      ownership,
+      { startingMovements },
+    );
+    const movements = backfillIdempotencyMovements(allocatedMovements);
+    await prepareInventoryMovementBatch(db, [...startingMovements, ...movements], ownership);
+
+    return {
+      result: {
+        transactionId: transaction.id,
+        date: transaction.date,
+        createdAt: transaction.created_at,
+        classification: doubleCountRisk ? 'double_count_risk' : 'eligible',
+        reason: doubleCountRisk
+          ? 'Matching manual inventory movement exists for the transaction date, part, and warehouse direction'
+          : null,
+        movementCount: movements.length,
+      },
+      movements,
+    };
+  } catch (err) {
+    if (err instanceof InventorySyncError && err.code === 'INSUFFICIENT_STOCK') {
+      return {
+        result: {
+          transactionId: transaction.id,
+          date: transaction.date,
+          createdAt: transaction.created_at,
+          classification: 'insufficient_stock',
+          reason: err.message,
+          movementCount: 0,
+        },
+        movements: [],
+      };
+    }
+    if (err instanceof InventorySyncError) {
+      return {
+        result: {
+          transactionId: transaction.id,
+          date: transaction.date,
+          createdAt: transaction.created_at,
+          classification: 'not_ready',
+          reason: err.message,
+          movementCount: 0,
+        },
+        movements: [],
+      };
+    }
+    throw err;
+  }
+}
+
 const TRANSACTION_FROM = `
   FROM transactions t
   LEFT JOIN parts p ON t.part_id = p.id
@@ -676,6 +893,147 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
   } catch (err) {
     console.error('GET /transactions error:', err);
     return c.json({ success: false, error: 'Failed to fetch transactions' }, 500);
+  }
+});
+
+// ============================================================================
+// POST /api/transactions/inventory-backfill - controlled dry-run/apply
+// ============================================================================
+transactionsRoutes.post('/inventory-backfill', requirePermission(Permission.MANAGE_INVENTORY_SYNC), async (c) => {
+  try {
+    const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const requestOwnership = scopeInsertValues(scope, user);
+    let body: IncomingBody = {};
+    try {
+      body = await c.req.json<IncomingBody>();
+    } catch {
+      body = {};
+    }
+
+    const dryRun = boolFromBody(firstDefined(body, ['dryRun', 'dry_run']), true);
+    const allowDoubleCountRisk = boolFromBody(
+      firstDefined(body, ['allowDoubleCountRisk', 'allow_double_count_risk']),
+      false,
+    );
+    const limit = Math.min(parsePositiveInteger(firstDefined(body, ['limit'])) || 100, 500);
+    const transactionIds = idListFromBody(firstDefined(body, ['transactionIds', 'transaction_ids']));
+
+    const params: SQLValue[] = [];
+    const conditions: string[] = [
+      "COALESCE(inventory_sync_status, 'not_ready') IN ('not_ready', 'failed', 'backfill_pending')",
+      'voided_at IS NULL',
+    ];
+    appendScopeCondition(conditions, params, scope, 'tenant_id', 'company_id');
+    if (transactionIds.length > 0) {
+      conditions.push(`id IN (${transactionIds.map(() => '?').join(', ')})`);
+      params.push(...transactionIds);
+    }
+
+    const { results: rows } = await c.env.DB.prepare(`
+      SELECT
+        id, date, movement_type, quantity, unit_price_usd, vendor, part_id,
+        serial_number, condition, po_number, po_file_key, po_file_name,
+        market_id, source_warehouse_id, destination_warehouse_id,
+        project_id, contact_id, tenant_id, company_id,
+        inventory_sync_status, inventory_sync_version, inventory_sync_error,
+        created_at, voided_at
+      FROM transactions
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY date ASC, created_at ASC
+      LIMIT ?
+    `).bind(...params, limit).all<BackfillTransactionRow>();
+
+    const results: BackfillResult[] = [];
+    const simulatedMovements: InventoryMovementInput[] = [];
+
+    for (const transaction of rows || []) {
+      const ownership = transactionOwnership(transaction, requestOwnership);
+      const startingMovements = dryRun ? simulatedMovements : [];
+      const candidate = await buildBackfillCandidate(
+        c.env.DB,
+        transaction,
+        ownership,
+        startingMovements,
+      );
+      const result: BackfillResult = { ...candidate.result, applied: false };
+
+      if (dryRun) {
+        if (
+          candidate.result.classification === 'eligible'
+          || (candidate.result.classification === 'double_count_risk' && allowDoubleCountRisk)
+        ) {
+          simulatedMovements.push(...candidate.movements);
+        }
+        results.push(result);
+        continue;
+      }
+
+      const shouldApply = candidate.result.classification === 'eligible'
+        || (candidate.result.classification === 'double_count_risk' && allowDoubleCountRisk);
+      if (!shouldApply) {
+        results.push(result);
+        continue;
+      }
+
+      const now = new Date().toISOString();
+      const movements = candidate.movements.map((movement) => ({
+        ...movement,
+        createdBy: user.id,
+        createdAt: now,
+      }));
+      const inventoryBatch = await prepareInventoryMovementBatch(c.env.DB, movements, ownership);
+      const nextSyncVersion = (transaction.inventory_sync_version || 0) + 1;
+      const updateScope = ownershipClause(ownership);
+      await c.env.DB.batch([
+        ...inventoryBatch.statements,
+        c.env.DB.prepare(`
+          UPDATE transactions
+          SET inventory_sync_status = 'synced',
+              inventory_sync_version = ?,
+              inventory_synced_at = ?,
+              inventory_sync_error = NULL,
+              updated_at = ?
+          WHERE id = ? AND ${updateScope.clause}
+        `).bind(nextSyncVersion, now, now, transaction.id, ...updateScope.params),
+      ]);
+
+      result.applied = true;
+      results.push(result);
+    }
+
+    const summary = {
+      total: results.length,
+      eligible: results.filter((item) => item.classification === 'eligible').length,
+      notReady: results.filter((item) => item.classification === 'not_ready').length,
+      insufficientStock: results.filter((item) => item.classification === 'insufficient_stock').length,
+      doubleCountRisk: results.filter((item) => item.classification === 'double_count_risk').length,
+      applied: results.filter((item) => item.applied === true).length,
+    };
+
+    await logAudit(
+      c.env.DB,
+      user.id,
+      dryRun ? 'DRY_RUN_TRANSACTION_INVENTORY_BACKFILL' : 'APPLY_TRANSACTION_INVENTORY_BACKFILL',
+      'transactions',
+      'inventory-backfill',
+      JSON.stringify({ summary, limit, allowDoubleCountRisk }),
+    );
+
+    return c.json({
+      success: true,
+      dryRun,
+      allowDoubleCountRisk,
+      summary,
+      results,
+    });
+  } catch (err) {
+    if (err instanceof InventorySyncError) {
+      const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
+      return c.json({ success: false, error: err.message, code: err.code }, status);
+    }
+    console.error('POST /transactions/inventory-backfill error:', err);
+    return c.json({ success: false, error: 'Failed to run transaction inventory backfill' }, 500);
   }
 });
 

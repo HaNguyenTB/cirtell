@@ -14,6 +14,7 @@ export enum Permission {
   VIEW_TRANSACTIONS = 'view_transactions',
   EDIT_TRANSACTIONS = 'edit_transactions',
   DELETE_TRANSACTIONS = 'delete_transactions',
+  MANAGE_INVENTORY_SYNC = 'manage_inventory_sync',
   VIEW_CARBON = 'view_carbon',
   EDIT_CARBON = 'edit_carbon',
   VIEW_WAREHOUSE = 'view_warehouse',
