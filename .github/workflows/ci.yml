@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      JWT_SECRET: test-ci-jwt-secret
+      GOOGLE_CLIENT_ID: test-client-id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: workers
+        run: npx tsc --noEmit
+
+      - name: Migration smoke check
+        working-directory: workers
+        run: |
+          rm -rf .tmp/d1-ci
+          mkdir -p .tmp
+          npx wrangler d1 migrations apply cirtell-db --local --persist-to .tmp/d1-ci
+          npx wrangler d1 execute cirtell-db --local --persist-to .tmp/d1-ci --command "PRAGMA foreign_key_check;" --json > .tmp/foreign-key-check.json
+          node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync('.tmp/foreign-key-check.json','utf8')); const rows=payload.flatMap(item => item.results || []); if (rows.length) { console.error(rows); process.exit(1); }"
+
+      - name: Test
+        working-directory: workers
+        run: npm test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VITE_API_URL: http://127.0.0.1:8787
+      VITE_GOOGLE_CLIENT_ID: test-client-id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VITE_API_URL: http://127.0.0.1:8787
+      VITE_GOOGLE_CLIENT_ID: test-client-id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            frontend/blob-report
+          if-no-files-found: ignore

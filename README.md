@@ -171,13 +171,32 @@ Project evidence files are stored in R2. D1 stores the evidence metadata and pro
 
 - Do not describe Cirtell as a derivative of another platform in product docs or user-facing copy.
 - Keep Cirtell documentation focused on its own workflows, deployment, security model, and data model.
-- Run checks before deployment:
+
+## Verification
+
+Backend:
 
 ```bash
 cd workers
+npm ci
 npx tsc --noEmit
+npm test
+```
 
-cd ../frontend
+Frontend:
+
+```bash
+cd frontend
+npm ci
+npm run lint
 npm run build
-npx eslint src/pages/PartsPage.tsx src/pages/ProjectsPage.tsx
+npx playwright install chromium
+npm run test:e2e
+```
+
+Migration:
+
+```bash
+cd workers
+npx wrangler d1 migrations apply cirtell-db --local
 ```

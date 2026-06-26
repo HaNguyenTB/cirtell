@@ -10,3 +10,4 @@ frontend/blob-report/
 test-results/
 playwright-report/
 blob-report/
+workers/.tmp/
