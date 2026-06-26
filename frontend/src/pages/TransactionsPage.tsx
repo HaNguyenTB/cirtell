@@ -368,6 +368,22 @@ async function readApiError(response: Response): Promise<string> {
   return parsed?.message || parsed?.error || response.statusText || 'Request failed';
 }
 
+function fileNameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const encodedMatch = /filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return encodedMatch[1];
+    }
+  }
+  const quotedMatch = /filename="([^"]+)"/i.exec(value);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  const plainMatch = /filename=([^;]+)/i.exec(value);
+  return plainMatch?.[1]?.trim() || null;
+}
+
 async function uploadTransactionPO(transactionId: string, file: File): Promise<void> {
   const formData = new FormData();
   formData.append('file', file);
@@ -400,7 +416,9 @@ async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = transaction.poFileName || 'purchase-order';
+  anchor.download = fileNameFromContentDisposition(response.headers.get('Content-Disposition'))
+    || transaction.poFileName
+    || 'purchase-order';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

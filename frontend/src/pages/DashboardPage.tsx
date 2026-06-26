@@ -16,6 +16,11 @@ interface HeadlineData {
   total_units: number;
   reuse_rate: number;
   total_co2e_kg: number;
+  actual_co2e_kg?: number;
+  avoided_co2e_kg: number;
+  net_co2e_kg?: number;
+  avoided_redeploy_co2e_kg?: number;
+  avoided_recycle_co2e_kg?: number;
   scope1_kg: number;
   scope2_kg: number;
   scope3_kg: number;
@@ -24,8 +29,8 @@ interface HeadlineData {
 
 function SkeletonCards() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5 mb-8">
-      {Array.from({ length: 5 }).map((_, i) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-5 mb-8">
+      {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="stat-card">
           <div className="flex items-center gap-3 mb-4">
             <div className="skeleton w-12 h-12 rounded-apple-xl" />
@@ -111,10 +116,16 @@ export function DashboardPage() {
           tone: 'verified' as const,
         },
         {
-          label: 'Total CO2e (kg)',
-          value: data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+          label: 'Actual CO2e',
+          value: (data.actual_co2e_kg ?? data.total_co2e_kg).toLocaleString(undefined, { maximumFractionDigits: 1 }),
           icon: Leaf,
           tone: 'verified' as const,
+        },
+        {
+          label: 'Avoided CO2e',
+          value: data.avoided_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+          icon: Recycle,
+          tone: 'deep' as const,
         },
         {
           label: 'Parts in Catalog',
@@ -134,6 +145,9 @@ export function DashboardPage() {
     : [];
 
   const totalEmissions = data ? data.scope1_kg + data.scope2_kg + data.scope3_kg : 1;
+  const actualCo2e = data ? data.actual_co2e_kg ?? data.total_co2e_kg : 0;
+  const avoidedCo2e = data?.avoided_co2e_kg ?? 0;
+  const netCo2e = data ? data.net_co2e_kg ?? actualCo2e - avoidedCo2e : 0;
 
   return (
     <div className="space-y-8 pb-8">
@@ -151,7 +165,7 @@ export function DashboardPage() {
       {loading ? (
         <SkeletonCards />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-5">
           {cards.map((card, i) => (
             <KpiCard key={card.label} {...card} delay={i * 0.05} />
           ))}
@@ -166,8 +180,17 @@ export function DashboardPage() {
               <p className="text-caption text-gray-500 mt-0.5">Kilograms of CO2 equivalent</p>
             </div>
             <div className="text-right">
-              <p className="font-display text-tile font-semibold text-gray-900">{data.total_co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</p>
-              <p className="text-caption text-gray-500">Total kg CO2e</p>
+              <p className="font-display text-tile font-semibold text-gray-900">{actualCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })}</p>
+              <p className="text-caption text-gray-500">Actual kg CO2e</p>
+              <p className="text-micro font-semibold text-verified-green mt-1">
+                Avoided {avoidedCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+              </p>
+              <p
+                className="text-micro font-semibold text-deep-teal mt-1"
+                title="Net CO2e = actual emissions minus avoided emissions"
+              >
+                Net {netCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg
+              </p>
             </div>
           </div>
 
@@ -199,6 +222,23 @@ export function DashboardPage() {
                 <p className="text-micro text-gray-400 mt-0.5">{scope.sub}</p>
               </div>
             ))}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+            <div className="bg-verified-green/5 rounded-apple-lg p-4 border border-verified-green/10">
+              <p className="text-caption font-semibold text-gray-500">Redeploy avoided</p>
+              <p className="text-sub-heading font-semibold text-gray-900 mt-1">
+                {(data.avoided_redeploy_co2e_kg || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                <span className="text-caption font-normal text-gray-400 ml-1">kg</span>
+              </p>
+            </div>
+            <div className="bg-deep-teal/5 rounded-apple-lg p-4 border border-deep-teal/10">
+              <p className="text-caption font-semibold text-gray-500">Recycle avoided</p>
+              <p className="text-sub-heading font-semibold text-gray-900 mt-1">
+                {(data.avoided_recycle_co2e_kg || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                <span className="text-caption font-normal text-gray-400 ml-1">kg</span>
+              </p>
+            </div>
           </div>
         </div>
       )}

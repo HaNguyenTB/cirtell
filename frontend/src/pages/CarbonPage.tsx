@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
-import { Plus, Trash2, X, Leaf, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, X, Leaf, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface GhgEntry {
   id: string;
@@ -27,10 +27,45 @@ interface Scope3Cat {
 }
 
 interface GhgReport {
-  total_kg: number;
-  scope1_kg: number;
-  scope2_kg: number;
-  scope3_kg: number;
+  totals: {
+    total_kg: number;
+    scope1_kg: number;
+    scope2_kg: number;
+    scope3_kg: number;
+    avoided_co2e_kg?: number;
+    avoided_redeploy_kg?: number;
+    avoided_recycle_kg?: number;
+  };
+  actual: {
+    total_co2e_kg: number;
+    scope1_kg: number;
+    scope2_kg: number;
+    scope3_kg: number;
+    entry_count: number;
+    breakdown: Array<Record<string, unknown>>;
+  };
+  avoided: {
+    total_co2e_kg: number;
+    entry_count: number;
+    by_movement_type: Array<{
+      movement_type: string;
+      co2e_kg: number;
+      entry_count: number;
+    }>;
+    by_part: Array<Record<string, unknown>>;
+  };
+  net: {
+    actual_minus_avoided_co2e_kg: number;
+  };
+}
+
+interface AvoidedSyncResult {
+  created: number;
+  updated: number;
+  alreadyExisting: number;
+  skippedMissingFactor: number;
+  avoidedCo2eKg: number;
+  warnings: Array<{ transactionId: string; partId: string | null; partNumber?: string | null; code: string }>;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -73,6 +108,10 @@ export function CarbonPage() {
   const [saving, setSaving] = useState(false);
 
   const [report, setReport] = useState<GhgReport | null>(null);
+  const [syncStart, setSyncStart] = useState('');
+  const [syncEnd, setSyncEnd] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<AvoidedSyncResult | null>(null);
 
   const fetchEntries = useCallback(async () => {
     setLoading(true);
@@ -98,8 +137,8 @@ export function CarbonPage() {
 
   const fetchReport = useCallback(async () => {
     try {
-      const res = await apiRequest<{ success: boolean; totals: GhgReport }>('/api/ghg/report');
-      setReport(res.totals);
+      const res = await apiRequest<GhgReport & { success: boolean }>('/api/ghg/report');
+      setReport(res);
     } catch { /* ignore */ }
   }, []);
 
@@ -157,13 +196,38 @@ export function CarbonPage() {
     }
   }
 
+  async function handleSyncAvoided() {
+    setSyncing(true);
+    setError('');
+    setSyncResult(null);
+    try {
+      const res = await apiRequest<{ success: boolean; data: AvoidedSyncResult }>('/api/ghg/avoided-emissions/sync', {
+        method: 'POST',
+        body: {
+          period_start: syncStart || undefined,
+          period_end: syncEnd || undefined,
+          dry_run: false,
+        },
+      });
+      setSyncResult(res.data);
+      fetchReport();
+      fetchEntries();
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to sync avoided emissions'));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const scopeLabel = (s: number) => s === 1 ? 'Scope 1' : s === 2 ? 'Scope 2' : 'Scope 3';
 
   const summaryCards = report ? [
-    { label: 'Total Emissions', value: report.total_kg, gradient: 'from-deep-teal to-signal-teal', isMain: true },
-    { label: 'Scope 1 - Direct', value: report.scope1_kg, ...scopeStyles[1] },
-    { label: 'Scope 2 - Energy', value: report.scope2_kg, ...scopeStyles[2] },
-    { label: 'Scope 3 - Value Chain', value: report.scope3_kg, ...scopeStyles[3] },
+    { label: 'Actual Emissions', value: report.actual.total_co2e_kg, gradient: 'from-deep-teal to-signal-teal', isMain: true },
+    { label: 'Avoided Emissions', value: report.avoided.total_co2e_kg, gradient: 'from-verified-green to-deep-teal', border: 'border-verified-green' },
+    { label: 'Net CO2e', value: report.net.actual_minus_avoided_co2e_kg, gradient: 'from-signal-teal to-verified-green', border: 'border-signal-teal' },
+    { label: 'Scope 1 - Direct', value: report.actual.scope1_kg, ...scopeStyles[1] },
+    { label: 'Scope 2 - Energy', value: report.actual.scope2_kg, ...scopeStyles[2] },
+    { label: 'Scope 3 - Value Chain', value: report.actual.scope3_kg, ...scopeStyles[3] },
   ] : [];
 
   return (
@@ -175,18 +239,20 @@ export function CarbonPage() {
           <p className="page-subtitle">GHG Protocol compliant emission tracking</p>
         </div>
         {canEdit && (
-          <button
-            onClick={() => { setForm(emptyForm); setShowForm(true); setError(''); }}
-            className="btn-primary"
-          >
-            <Plus size={16} /> Add Entry
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setForm(emptyForm); setShowForm(true); setError(''); }}
+              className="btn-primary"
+            >
+              <Plus size={16} /> Add Entry
+            </button>
+          </div>
         )}
       </div>
 
       {/* Summary cards */}
       {report && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
           {summaryCards.map((c, i) => (
             <div
               key={c.label}
@@ -203,6 +269,94 @@ export function CarbonPage() {
               </p>
             </div>
           ))}
+        </div>
+      )}
+
+      {report && (
+        <div className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.75fr] gap-4 mb-6">
+          <div className="stat-card p-5">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900">Avoided emissions breakdown</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Transaction-generated CO2e avoided by lifecycle action</p>
+              </div>
+              <span className="badge bg-verified-green/10 text-verified-green">
+                {report.avoided.entry_count} entries
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {['Redeploy', 'Recycle'].map((movementType) => {
+                const row = report.avoided.by_movement_type.find((item) => item.movement_type === movementType);
+                return (
+                  <div key={movementType} className="rounded-apple-lg border border-black/[0.04] bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-gray-500">{movementType}</p>
+                    <p className="text-xl font-bold text-gray-900 mt-1">
+                      {(row?.co2e_kg || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                      <span className="text-xs font-normal text-gray-400 ml-1">kg CO2e</span>
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">{row?.entry_count || 0} generated entries</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {canEdit && (
+            <div className="stat-card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Sync avoided emissions</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Uses Redeploy and Recycle transactions</p>
+                </div>
+                <RefreshCw size={16} className="text-verified-green" />
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <input
+                  type="date"
+                  value={syncStart}
+                  onChange={(e) => setSyncStart(e.target.value)}
+                  className="input-base"
+                  aria-label="Sync period start"
+                />
+                <input
+                  type="date"
+                  value={syncEnd}
+                  onChange={(e) => setSyncEnd(e.target.value)}
+                  className="input-base"
+                  aria-label="Sync period end"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleSyncAvoided}
+                disabled={syncing}
+                className="btn-primary w-full justify-center"
+              >
+                <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
+                {syncing ? 'Syncing...' : 'Sync avoided emissions'}
+              </button>
+              {syncResult && (
+                <div className="mt-4 text-xs text-gray-500 space-y-1">
+                  <p>
+                    Created {syncResult.created}, updated {syncResult.updated}, existing {syncResult.alreadyExisting}
+                  </p>
+                  <p>
+                    Avoided {syncResult.avoidedCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO2e
+                  </p>
+                  {syncResult.skippedMissingFactor > 0 && (
+                    <p className="text-signal-teal">
+                      {syncResult.skippedMissingFactor} skipped because emission factors are missing.
+                    </p>
+                  )}
+                  {syncResult.warnings.length > 0 && (
+                    <p className="text-gray-400">
+                      First warning: {syncResult.warnings[0].code} on {syncResult.warnings[0].partNumber || syncResult.warnings[0].partId || 'unknown part'}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
