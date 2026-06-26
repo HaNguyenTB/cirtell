@@ -11,10 +11,40 @@ import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWher
 import { applyInventoryMovement, InventorySyncError, type InventoryMovementType } from '../services/inventorySync';
 
 type Variables = { user: User };
+type SQLValue = string | number | null;
+type ScopeValues = { tenantId: string | null; companyId: string | null };
 
 export const warehouseRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 warehouseRoutes.use('*', authMiddleware);
+
+function ownershipClause(values: ScopeValues, alias = ''): { clause: string; params: SQLValue[] } {
+  const prefix = alias ? `${alias}.` : '';
+  if (values.tenantId && values.companyId) {
+    return {
+      clause: `${prefix}tenant_id = ? AND ${prefix}company_id = ?`,
+      params: [values.tenantId, values.companyId],
+    };
+  }
+  if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
+  if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
+  return { clause: '1=0', params: [] };
+}
+
+function duplicateWarehouseCodeResponse() {
+  return {
+    success: false,
+    error: 'Warehouse code already exists in the current company',
+    code: 'DUPLICATE_WAREHOUSE_CODE',
+  };
+}
+
+function isUniqueConstraintError(err: unknown, indexNames: string[]): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return lower.includes('unique constraint')
+    || indexNames.some((name) => lower.includes(name.toLowerCase()));
+}
 
 // ============================================================================
 // WAREHOUSES
@@ -80,10 +110,12 @@ warehouseRoutes.post('/', requirePermission(Permission.EDIT_WAREHOUSE), async (c
       return c.json({ success: false, error: 'Name and code are required' }, 400);
     }
 
-    const existing = await c.env.DB.prepare('SELECT id FROM warehouses WHERE code = ? AND tenant_id = ?')
-      .bind(body.code.trim().toUpperCase(), ownership.tenantId)
+    const normalizedCode = body.code.trim().toUpperCase();
+    const ownerWhere = ownershipClause(ownership);
+    const existing = await c.env.DB.prepare(`SELECT id FROM warehouses WHERE UPPER(TRIM(code)) = UPPER(TRIM(?)) AND ${ownerWhere.clause}`)
+      .bind(normalizedCode, ...ownerWhere.params)
       .first();
-    if (existing) return c.json({ success: false, error: 'Warehouse code already exists' }, 409);
+    if (existing) return c.json(duplicateWarehouseCodeResponse(), 409);
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -92,7 +124,7 @@ warehouseRoutes.post('/', requirePermission(Permission.EDIT_WAREHOUSE), async (c
       INSERT INTO warehouses (id, tenant_id, company_id, name, code, address, city, country, capacity_units, status, notes, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      id, ownership.tenantId, ownership.companyId, body.name.trim(), body.code.trim().toUpperCase(),
+      id, ownership.tenantId, ownership.companyId, body.name.trim(), normalizedCode,
       body.address?.trim() || null, body.city?.trim() || null, body.country?.trim() || null,
       body.capacity_units || null, body.status || 'active', body.notes?.trim() || null,
       now, now,
@@ -101,6 +133,9 @@ warehouseRoutes.post('/', requirePermission(Permission.EDIT_WAREHOUSE), async (c
     await logAudit(c.env.DB, user.id, 'CREATE_WAREHOUSE', 'warehouses', id);
     return c.json({ success: true, id }, 201);
   } catch (err: any) {
+    if (isUniqueConstraintError(err, ['ux_warehouses_scope_code'])) {
+      return c.json(duplicateWarehouseCodeResponse(), 409);
+    }
     console.error('POST /warehouses error:', err);
     return c.json({ success: false, error: 'Failed to create warehouse' }, 500);
   }
@@ -111,6 +146,7 @@ warehouseRoutes.put('/:id', requirePermission(Permission.EDIT_WAREHOUSE), async 
   try {
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
+    const ownership = scopeInsertValues(scope, user);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const id = c.req.param('id')!;
     const body = await c.req.json();
@@ -120,11 +156,29 @@ warehouseRoutes.put('/:id', requirePermission(Permission.EDIT_WAREHOUSE), async 
       .first();
     if (!existing) return c.json({ success: false, error: 'Warehouse not found' }, 404);
 
+    let normalizedCode: string | null = null;
+    if (body.code !== undefined) {
+      normalizedCode = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
+      if (!normalizedCode) return c.json({ success: false, error: 'Warehouse code is required' }, 400);
+
+      const ownerWhere = ownershipClause(ownership);
+      const duplicate = await c.env.DB.prepare(`
+        SELECT id FROM warehouses
+        WHERE UPPER(TRIM(code)) = UPPER(TRIM(?))
+          AND id <> ?
+          AND ${ownerWhere.clause}
+      `).bind(normalizedCode, id, ...ownerWhere.params).first<{ id: string }>();
+      if (duplicate) return c.json(duplicateWarehouseCodeResponse(), 409);
+    }
+
     const sets: string[] = [];
     const params: any[] = [];
     const fields = ['name', 'code', 'address', 'city', 'country', 'capacity_units', 'status', 'notes'];
     for (const f of fields) {
-      if (body[f] !== undefined) { sets.push(`${f} = ?`); params.push(body[f]); }
+      if (body[f] !== undefined) {
+        sets.push(`${f} = ?`);
+        params.push(f === 'code' ? normalizedCode : body[f]);
+      }
     }
     if (sets.length === 0) return c.json({ success: false, error: 'No fields to update' }, 400);
 
@@ -138,6 +192,9 @@ warehouseRoutes.put('/:id', requirePermission(Permission.EDIT_WAREHOUSE), async 
     await logAudit(c.env.DB, user.id, 'UPDATE_WAREHOUSE', 'warehouses', id);
     return c.json({ success: true });
   } catch (err: any) {
+    if (isUniqueConstraintError(err, ['ux_warehouses_scope_code'])) {
+      return c.json(duplicateWarehouseCodeResponse(), 409);
+    }
     console.error('PUT /warehouses/:id error:', err);
     return c.json({ success: false, error: 'Failed to update warehouse' }, 500);
   }

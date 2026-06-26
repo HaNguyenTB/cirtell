@@ -215,11 +215,32 @@ export async function authMiddleware(c: Context<{ Bindings: Env; Variables: Vari
 /**
  * Audit log helper
  */
-export async function logAudit(db: D1Database, userId: string, action: string, resource: string, resourceId: string, details?: string) {
+export async function logAudit(
+  db: D1Database,
+  userId: string,
+  action: string,
+  resource: string,
+  resourceId: string,
+  details?: string,
+  tenantId?: string | null,
+  companyId?: string | null,
+) {
   try {
     await db.prepare(
-      'INSERT INTO audit_log (id, user_id, action, resource_type, resource_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).bind(crypto.randomUUID(), userId, action, resource, resourceId, details || null, new Date().toISOString()).run();
+      `INSERT INTO audit_log (
+        id, user_id, action, resource_type, resource_id, details, tenant_id, company_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      userId,
+      action,
+      resource,
+      resourceId,
+      details || null,
+      tenantId || null,
+      companyId || null,
+      new Date().toISOString(),
+    ).run();
   } catch (e) {
     console.error('Audit log failed:', e);
   }

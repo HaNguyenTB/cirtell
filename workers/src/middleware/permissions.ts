@@ -26,7 +26,9 @@ export enum Permission {
 }
 
 const ROLE_PERMISSIONS: Record<string, Permission[]> = {
-  Admin: Object.values(Permission),
+  Admin: Object.values(Permission).filter(
+    (permission) => permission !== Permission.MANAGE_INVENTORY_SYNC,
+  ),
   User: [
     Permission.VIEW_DASHBOARD,
     Permission.VIEW_PARTS,

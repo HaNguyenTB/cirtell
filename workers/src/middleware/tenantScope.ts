@@ -105,6 +105,12 @@ export function scopedWhere(
   tenantColumn: string,
   companyColumn: string,
 ): { clause: string; params: SQLValue[] } {
+  if (scope.tenantId && scope.companyId) {
+    return {
+      clause: `${tenantColumn} = ? AND ${companyColumn} = ?`,
+      params: [scope.tenantId, scope.companyId],
+    };
+  }
   if (scope.companyId) return { clause: `${companyColumn} = ?`, params: [scope.companyId] };
   if (scope.tenantId) return { clause: `${tenantColumn} = ?`, params: [scope.tenantId] };
   return { clause: '1=1', params: [] };

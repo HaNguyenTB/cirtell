@@ -14,6 +14,10 @@ export const partsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }
 partsRoutes.use('*', authMiddleware);
 
 type SQLValue = string | number | null;
+interface ScopeValues {
+  tenantId: string | null;
+  companyId: string | null;
+}
 type ImportPartRow = Record<string, unknown> & {
   part_number?: unknown;
   manufacturer_part_number?: unknown;
@@ -35,6 +39,25 @@ interface ImportError {
   row: number;
   part_number?: string;
   error: string;
+}
+
+class RouteError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status = 400, code?: string) {
+    super(message);
+    this.name = 'RouteError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function firstDefined(body: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) return body[key];
+  }
+  return undefined;
 }
 
 function normalizeText(value: unknown, maxLength = 500): string | null {
@@ -61,20 +84,75 @@ function parseBoolean(value: unknown): number {
   return ['1', 'true', 'yes', 'y', 'review', 'needs review'].includes(text) ? 1 : 0;
 }
 
-async function resolveVendorId(db: D1Database, vendor: unknown): Promise<string | null> {
+function ownershipClause(values: ScopeValues, alias = ''): { clause: string; params: SQLValue[] } {
+  const prefix = alias ? `${alias}.` : '';
+  if (values.tenantId && values.companyId) {
+    return {
+      clause: `${prefix}tenant_id = ? AND ${prefix}company_id = ?`,
+      params: [values.tenantId, values.companyId],
+    };
+  }
+  if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
+  if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
+  return { clause: '1=0', params: [] };
+}
+
+function isUniqueConstraintError(err: unknown, indexNames: string[]): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return lower.includes('unique constraint')
+    || indexNames.some((name) => lower.includes(name.toLowerCase()));
+}
+
+async function validateVendorId(db: D1Database, vendorId: string, ownership: ScopeValues): Promise<string> {
+  const ownerWhere = ownershipClause(ownership);
+  const existing = await db.prepare(`SELECT id FROM vendors WHERE id = ? AND ${ownerWhere.clause}`)
+    .bind(vendorId, ...ownerWhere.params)
+    .first<{ id: string }>();
+  if (!existing) throw new RouteError('Vendor not found', 400);
+  return existing.id;
+}
+
+async function findOrCreateVendorByName(db: D1Database, vendor: unknown, ownership: ScopeValues): Promise<string | null> {
   const vendorName = normalizeText(vendor, 160);
   if (!vendorName) return null;
 
-  const existing = await db.prepare('SELECT id FROM vendors WHERE vendor_name = ?')
-    .bind(vendorName)
+  const ownerWhere = ownershipClause(ownership);
+  const existing = await db.prepare(`SELECT id FROM vendors WHERE LOWER(TRIM(vendor_name)) = LOWER(TRIM(?)) AND ${ownerWhere.clause}`)
+    .bind(vendorName, ...ownerWhere.params)
     .first<{ id: string }>();
   if (existing) return existing.id;
 
   const vendorId = `vendor_${crypto.randomUUID()}`;
-  await db.prepare('INSERT INTO vendors (id, vendor_name) VALUES (?, ?)')
-    .bind(vendorId, vendorName)
-    .run();
+  try {
+    await db.prepare('INSERT INTO vendors (id, tenant_id, company_id, vendor_name) VALUES (?, ?, ?, ?)')
+      .bind(vendorId, ownership.tenantId, ownership.companyId, vendorName)
+      .run();
+  } catch (err) {
+    if (isUniqueConstraintError(err, ['ux_vendors_scope_name'])) {
+      throw new RouteError(
+        'Vendor already exists in the current company',
+        409,
+        'DUPLICATE_VENDOR_NAME',
+      );
+    }
+    throw err;
+  }
   return vendorId;
+}
+
+async function resolveVendorId(db: D1Database, input: Record<string, unknown>, ownership: ScopeValues): Promise<string | null> {
+  const explicitVendorId = normalizeText(firstDefined(input, ['vendor_id', 'vendorId']), 160);
+  if (explicitVendorId) return validateVendorId(db, explicitVendorId, ownership);
+  return findOrCreateVendorByName(db, firstDefined(input, ['vendor', 'vendor_name', 'vendorName']), ownership);
+}
+
+function duplicatePartNumberResponse() {
+  return {
+    success: false,
+    error: 'Part number already exists in the current company',
+    code: 'DUPLICATE_PART_NUMBER',
+  };
 }
 
 // ============================================================================
@@ -111,7 +189,12 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
     const where = `WHERE ${conditions.join(' AND ')}`;
 
     const countResult = await c.env.DB.prepare(
-      `SELECT COUNT(*) as total FROM parts p LEFT JOIN vendors v ON p.vendor_id = v.id ${where}`,
+      `SELECT COUNT(*) as total
+       FROM parts p
+       LEFT JOIN vendors v ON p.vendor_id = v.id
+        AND p.tenant_id = v.tenant_id
+        AND p.company_id = v.company_id
+       ${where}`,
     ).bind(...params).first<{ total: number }>();
 
     const { results } = await c.env.DB.prepare(`
@@ -128,6 +211,8 @@ partsRoutes.get('/', requirePermission(Permission.VIEW_PARTS), async (c) => {
         p.created_at, p.updated_at
       FROM parts p
       LEFT JOIN vendors v ON p.vendor_id = v.id
+        AND p.tenant_id = v.tenant_id
+        AND p.company_id = v.company_id
       LEFT JOIN tenants t ON t.id = p.tenant_id
       LEFT JOIN companies c ON c.id = p.company_id
       ${where}
@@ -156,6 +241,8 @@ partsRoutes.get('/:id', requirePermission(Permission.VIEW_PARTS), async (c) => {
              c.name as company_name
       FROM parts p
       LEFT JOIN vendors v ON p.vendor_id = v.id
+        AND p.tenant_id = v.tenant_id
+        AND p.company_id = v.company_id
       LEFT JOIN tenants t ON t.id = p.tenant_id
       LEFT JOIN companies c ON c.id = p.company_id
       WHERE p.id = ? AND ${scopeWhere.clause}
@@ -200,8 +287,8 @@ partsRoutes.post('/import', requirePermission(Permission.EDIT_PARTS), async (c) 
       }
 
       try {
-        const vendorId = await resolveVendorId(c.env.DB, row.vendor);
-        const existing = await c.env.DB.prepare(`SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?) AND ${scopeWhere.clause}`)
+        const vendorId = await resolveVendorId(c.env.DB, row, scopeValues);
+        const existing = await c.env.DB.prepare(`SELECT id FROM parts WHERE LOWER(TRIM(part_number)) = LOWER(TRIM(?)) AND ${scopeWhere.clause}`)
           .bind(partNumber, ...scopeWhere.params)
           .first<{ id: string }>();
 
@@ -323,25 +410,16 @@ partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
     }
 
     // Check duplicate
+    const ownerWhere = ownershipClause(scopeValues);
     const existing = await c.env.DB.prepare(
-      'SELECT id FROM parts WHERE part_number = ? AND tenant_id = ?',
-    ).bind(body.part_number.trim(), scopeValues.tenantId).first();
+      `SELECT id FROM parts WHERE LOWER(TRIM(part_number)) = LOWER(TRIM(?)) AND ${ownerWhere.clause}`,
+    ).bind(body.part_number.trim(), ...ownerWhere.params).first();
     if (existing) {
-      return c.json({ success: false, error: 'Part number already exists' }, 409);
+      return c.json(duplicatePartNumberResponse(), 409);
     }
 
     // Resolve vendor
-    let vendorId: string | null = null;
-    if (body.vendor?.trim()) {
-      const vendorName = body.vendor.trim();
-      const existingV = await c.env.DB.prepare('SELECT id FROM vendors WHERE vendor_name = ?').bind(vendorName).first<{ id: string }>();
-      if (existingV) {
-        vendorId = existingV.id;
-      } else {
-        vendorId = `vendor_${crypto.randomUUID()}`;
-        await c.env.DB.prepare('INSERT INTO vendors (id, vendor_name) VALUES (?, ?)').bind(vendorId, vendorName).run();
-      }
-    }
+    const vendorId = await resolveVendorId(c.env.DB, body, scopeValues);
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -375,6 +453,16 @@ partsRoutes.post('/', requirePermission(Permission.EDIT_PARTS), async (c) => {
     await logAudit(c.env.DB, user.id, 'CREATE_PART', 'parts', id);
     return c.json({ success: true, id }, 201);
   } catch (err: any) {
+    if (err instanceof RouteError) {
+      return c.json({
+        success: false,
+        error: err.message,
+        ...(err.code ? { code: err.code } : {}),
+      }, err.status as any);
+    }
+    if (isUniqueConstraintError(err, ['ux_parts_scope_part_number'])) {
+      return c.json(duplicatePartNumberResponse(), 409);
+    }
     console.error('POST /parts error:', err);
     return c.json({ success: false, error: 'Failed to create part' }, 500);
   }
@@ -387,6 +475,7 @@ partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
   try {
     const user = c.get('user');
     const scope = await resolveTenantScope(c);
+    const scopeValues = scopeInsertValues(scope, user);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const id = c.req.param('id')!;
     const body = await c.req.json();
@@ -395,6 +484,20 @@ partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
       .bind(id, ...scopeWhere.params)
       .first();
     if (!existing) return c.json({ success: false, error: 'Part not found' }, 404);
+
+    let nextPartNumber: string | null = null;
+    if (body.part_number !== undefined) {
+      nextPartNumber = normalizeText(body.part_number, 160);
+      if (!nextPartNumber) return c.json({ success: false, error: 'Part number is required' }, 400);
+      const ownerWhere = ownershipClause(scopeValues);
+      const duplicate = await c.env.DB.prepare(`
+        SELECT id FROM parts
+        WHERE LOWER(TRIM(part_number)) = LOWER(TRIM(?))
+          AND id <> ?
+          AND ${ownerWhere.clause}
+      `).bind(nextPartNumber, id, ...ownerWhere.params).first<{ id: string }>();
+      if (duplicate) return c.json(duplicatePartNumberResponse(), 409);
+    }
 
     const sets: string[] = [];
     const params: any[] = [];
@@ -414,20 +517,16 @@ partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
     for (const [key, col] of Object.entries(fields)) {
       if (body[key] !== undefined) {
         sets.push(`${col} = ?`);
-        params.push(key === 'needs_review' ? (body[key] ? 1 : 0) : body[key]);
+        params.push(key === 'part_number' ? nextPartNumber : key === 'needs_review' ? (body[key] ? 1 : 0) : body[key]);
       }
     }
 
     if (body.vendor !== undefined) {
-      let vendorId: string | null = null;
-      if (body.vendor?.trim()) {
-        const name = body.vendor.trim();
-        const v = await c.env.DB.prepare('SELECT id FROM vendors WHERE vendor_name = ?').bind(name).first<{ id: string }>();
-        if (v) { vendorId = v.id; } else {
-          vendorId = `vendor_${crypto.randomUUID()}`;
-          await c.env.DB.prepare('INSERT INTO vendors (id, vendor_name) VALUES (?, ?)').bind(vendorId, name).run();
-        }
-      }
+      const vendorId = await resolveVendorId(c.env.DB, body, scopeValues);
+      sets.push('vendor_id = ?');
+      params.push(vendorId);
+    } else if (body.vendor_id !== undefined || body.vendorId !== undefined) {
+      const vendorId = await resolveVendorId(c.env.DB, body, scopeValues);
       sets.push('vendor_id = ?');
       params.push(vendorId);
     }
@@ -443,6 +542,16 @@ partsRoutes.put('/:id', requirePermission(Permission.EDIT_PARTS), async (c) => {
 
     return c.json({ success: true });
   } catch (err: any) {
+    if (err instanceof RouteError) {
+      return c.json({
+        success: false,
+        error: err.message,
+        ...(err.code ? { code: err.code } : {}),
+      }, err.status as any);
+    }
+    if (isUniqueConstraintError(err, ['ux_parts_scope_part_number'])) {
+      return c.json(duplicatePartNumberResponse(), 409);
+    }
     console.error('PUT /parts/:id error:', err);
     return c.json({ success: false, error: 'Failed to update part' }, 500);
   }
@@ -484,6 +593,8 @@ partsRoutes.get('/vendors/list', requirePermission(Permission.VIEW_PARTS), async
       `SELECT DISTINCT v.id, v.vendor_name
        FROM vendors v
        JOIN parts p ON p.vendor_id = v.id
+        AND p.tenant_id = v.tenant_id
+        AND p.company_id = v.company_id
        WHERE ${scopeWhere.clause}
        ORDER BY v.vendor_name`,
     ).bind(...scopeWhere.params).all();

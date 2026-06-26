@@ -5,7 +5,7 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../index';
-import { authMiddleware, type User } from '../middleware/auth';
+import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 
@@ -32,6 +32,71 @@ const SCOPE3_CATEGORIES: Record<number, { name: string; stream: 'upstream' | 'do
   14: { name: 'Franchises', stream: 'downstream' },
   15: { name: 'Investments', stream: 'downstream' },
 };
+
+const AVOIDED_EMISSIONS_METHOD = 'avoided_emissions_v1';
+
+interface AvoidedEmissionCandidate {
+  transaction_id: string;
+  date: string;
+  movement_type: 'Redeploy' | 'Recycle';
+  tenant_id: string | null;
+  company_id: string | null;
+  part_id: string | null;
+  part_number: string | null;
+  quantity: number | null;
+  emission_factor_kg: number | null;
+}
+
+interface ExistingAvoidedEntry {
+  id: string;
+  activity_data: number;
+  emission_factor: number;
+  co2e_kg: number;
+  reporting_period_start: string;
+  reporting_period_end: string;
+  source_movement_type: string | null;
+}
+
+interface AvoidedSyncWarning {
+  transactionId: string;
+  partId: string | null;
+  partNumber?: string | null;
+  code: string;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function auditDetails(details: Record<string, unknown>): string {
+  return JSON.stringify(details);
+}
+
+function dateOnly(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+function roundedKg(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function valuesDiffer(existing: ExistingAvoidedEntry, next: {
+  quantity: number;
+  factor: number;
+  co2eKg: number;
+  date: string;
+  movementType: 'Redeploy' | 'Recycle';
+}): boolean {
+  return Number(existing.activity_data) !== next.quantity
+    || Number(existing.emission_factor) !== next.factor
+    || Number(existing.co2e_kg) !== next.co2eKg
+    || existing.reporting_period_start !== next.date
+    || existing.reporting_period_end !== next.date
+    || existing.source_movement_type !== next.movementType;
+}
 
 // GET /api/ghg/categories
 carbonRoutes.get('/categories', (c) => {
@@ -67,9 +132,21 @@ carbonRoutes.get('/entries', requirePermission(Permission.VIEW_CARBON), async (c
     if (periodEnd) { conditions.push('e.reporting_period_start <= ?'); params.push(periodEnd); }
 
     const { results } = await c.env.DB.prepare(`
-      SELECT e.*, u.name as created_by_name
+      SELECT
+        e.*,
+        u.name as created_by_name,
+        t.movement_type as transaction_movement_type,
+        p.part_number as part_number
       FROM ghg_emission_entries e
       LEFT JOIN users u ON u.id = e.created_by
+      LEFT JOIN transactions t
+        ON t.id = e.transaction_id
+       AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
+      LEFT JOIN parts p
+        ON p.id = e.part_id
+       AND (p.tenant_id = e.tenant_id OR (p.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (p.company_id = e.company_id OR (p.company_id IS NULL AND e.company_id IS NULL))
       WHERE ${conditions.join(' AND ')}
       ORDER BY e.scope, e.category_id, e.reporting_period_start DESC
     `).bind(...params).all();
@@ -130,15 +207,32 @@ carbonRoutes.post('/entries', requirePermission(Permission.EDIT_CARBON), async (
         source_description, activity_data, activity_unit,
         emission_factor, emission_factor_unit, emission_factor_source,
         co2e_kg, reporting_period_start, reporting_period_end,
-        data_quality, methodology_notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        data_quality, methodology_notes, source_type, transaction_id, part_id,
+        calculation_method, factor_source, source_movement_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id, scopeValues.tenantId, scopeValues.companyId, user.id, scopeNum, catId, stream,
       source_description, activityVal, activity_unit,
       efVal, emission_factor_unit || 'kgCO2e', emission_factor_source || null,
       co2eKg, reporting_period_start, reporting_period_end,
       data_quality || 'estimated', methodology_notes || null,
+      'manual', null, null, 'activity_factor_v1', emission_factor_source || null, null,
     ).run();
+
+    await logAudit(
+      c.env.DB,
+      user.id,
+      'CREATE_GHG_ENTRY',
+      'ghg_emission_entries',
+      id,
+      auditDetails({
+        scope: scopeNum,
+        category: catId,
+        co2eKg,
+      }),
+      scopeValues.tenantId,
+      scopeValues.companyId,
+    );
 
     return c.json({ success: true, data: { id, co2e_kg: co2eKg } }, 201);
   } catch (err: any) {
@@ -148,21 +242,428 @@ carbonRoutes.post('/entries', requirePermission(Permission.EDIT_CARBON), async (
 });
 
 // ============================================================================
+// POST /api/ghg/avoided-emissions/sync
+// ============================================================================
+carbonRoutes.post('/avoided-emissions/sync', requirePermission(Permission.EDIT_CARBON), async (c) => {
+  try {
+    const user = c.get('user');
+    const scopeContext = await resolveTenantScope(c);
+    const bodyText = await c.req.text();
+    let body: Record<string, unknown> = {};
+    if (bodyText.trim()) {
+      try {
+        body = JSON.parse(bodyText) as Record<string, unknown>;
+      } catch {
+        return c.json({ success: false, error: 'Invalid request body', code: 'INVALID_REQUEST' }, 400);
+      }
+    }
+
+    const transactionIdValue = body.transaction_id ?? c.req.query('transaction_id');
+    const periodStartValue = body.period_start ?? c.req.query('period_start');
+    const periodEndValue = body.period_end ?? c.req.query('period_end');
+    const dryRunValue = body.dry_run ?? c.req.query('dry_run');
+
+    if (transactionIdValue !== undefined && typeof transactionIdValue !== 'string') {
+      return c.json({ success: false, error: 'transaction_id must be a string', code: 'INVALID_REQUEST' }, 400);
+    }
+    const transactionId = typeof transactionIdValue === 'string' && transactionIdValue.trim()
+      ? transactionIdValue.trim()
+      : null;
+
+    const periodStart = periodStartValue === undefined ? null : dateOnly(periodStartValue);
+    const periodEnd = periodEndValue === undefined ? null : dateOnly(periodEndValue);
+    if ((periodStartValue !== undefined && !periodStart) || (periodEndValue !== undefined && !periodEnd)) {
+      return c.json({ success: false, error: 'Invalid reporting period', code: 'INVALID_PERIOD' }, 400);
+    }
+    if (periodStart && periodEnd && periodStart > periodEnd) {
+      return c.json({ success: false, error: 'period_start must be before or equal to period_end', code: 'INVALID_PERIOD' }, 400);
+    }
+
+    let dryRun = false;
+    if (dryRunValue !== undefined) {
+      if (typeof dryRunValue === 'boolean') {
+        dryRun = dryRunValue;
+      } else if (dryRunValue === 'true') {
+        dryRun = true;
+      } else if (dryRunValue === 'false') {
+        dryRun = false;
+      } else {
+        return c.json({ success: false, error: 'dry_run must be boolean', code: 'INVALID_REQUEST' }, 400);
+      }
+    }
+
+    if (transactionId) {
+      const txScope = scopedWhere(scopeContext, 'tenant_id', 'company_id');
+      const scopedTransaction = await c.env.DB.prepare(`
+        SELECT id
+        FROM transactions
+        WHERE id = ? AND ${txScope.clause}
+      `).bind(transactionId, ...txScope.params).first<{ id: string }>();
+      if (!scopedTransaction) {
+        return c.json({ success: false, error: 'Transaction not found', code: 'TRANSACTION_NOT_FOUND' }, 404);
+      }
+    }
+
+    const params: any[] = [];
+    const conditions: string[] = [
+      "t.movement_type IN ('Redeploy', 'Recycle')",
+      't.voided_at IS NULL',
+    ];
+    appendScopeCondition(conditions, params, scopeContext, 't.tenant_id', 't.company_id');
+    if (transactionId) {
+      conditions.push('t.id = ?');
+      params.push(transactionId);
+    }
+    if (periodStart) {
+      conditions.push('t.date >= ?');
+      params.push(periodStart);
+    }
+    if (periodEnd) {
+      conditions.push('t.date <= ?');
+      params.push(periodEnd);
+    }
+
+    const scanned = await c.env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM transactions t
+      WHERE ${conditions.join(' AND ')}
+    `).bind(...params).first<{ count: number }>();
+
+    const { results } = await c.env.DB.prepare(`
+      WITH eligible_transactions AS (
+        SELECT
+          t.id,
+          t.tenant_id,
+          t.company_id,
+          t.date,
+          t.movement_type,
+          t.part_id,
+          t.quantity
+        FROM transactions t
+        WHERE ${conditions.join(' AND ')}
+      ),
+      active_items AS (
+        SELECT
+          ti.transaction_id,
+          ti.part_id,
+          SUM(ti.quantity) AS quantity
+        FROM transaction_items ti
+        JOIN eligible_transactions t ON t.id = ti.transaction_id
+        WHERE ti.superseded_at IS NULL
+          AND ti.part_id IS NOT NULL
+        GROUP BY ti.transaction_id, ti.part_id
+      ),
+      candidates AS (
+        SELECT
+          t.id AS transaction_id,
+          t.tenant_id,
+          t.company_id,
+          t.date,
+          t.movement_type,
+          ai.part_id,
+          ai.quantity
+        FROM eligible_transactions t
+        JOIN active_items ai ON ai.transaction_id = t.id
+
+        UNION ALL
+
+        SELECT
+          t.id AS transaction_id,
+          t.tenant_id,
+          t.company_id,
+          t.date,
+          t.movement_type,
+          t.part_id,
+          t.quantity
+        FROM eligible_transactions t
+        WHERE t.part_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM active_items ai WHERE ai.transaction_id = t.id
+          )
+      )
+      SELECT
+        c.transaction_id,
+        c.date,
+        c.movement_type,
+        c.tenant_id,
+        c.company_id,
+        c.part_id,
+        c.quantity,
+        p.part_number,
+        p.emission_factor_kg
+      FROM candidates c
+      LEFT JOIN parts p
+        ON p.id = c.part_id
+       AND (p.tenant_id = c.tenant_id OR (p.tenant_id IS NULL AND c.tenant_id IS NULL))
+       AND (p.company_id = c.company_id OR (p.company_id IS NULL AND c.company_id IS NULL))
+      WHERE c.part_id IS NOT NULL
+      ORDER BY c.date, c.transaction_id, c.part_id
+    `).bind(...params).all<AvoidedEmissionCandidate>();
+
+    const candidates = results || [];
+    let created = 0;
+    let updated = 0;
+    let alreadyExisting = 0;
+    let skippedMissingPart = 0;
+    let skippedMissingFactor = 0;
+    let skippedInvalidQuantity = 0;
+    let avoidedCo2eKg = 0;
+    const warnings: AvoidedSyncWarning[] = [];
+
+    for (const candidate of candidates) {
+      const quantity = positiveNumber(candidate.quantity);
+      if (!quantity) {
+        skippedInvalidQuantity += 1;
+        warnings.push({
+          transactionId: candidate.transaction_id,
+          partId: candidate.part_id,
+          code: 'INVALID_QUANTITY',
+        });
+        continue;
+      }
+
+      if (!candidate.part_id || !candidate.part_number) {
+        skippedMissingPart += 1;
+        warnings.push({
+          transactionId: candidate.transaction_id,
+          partId: candidate.part_id,
+          code: 'MISSING_PART',
+        });
+        continue;
+      }
+
+      const factor = positiveNumber(candidate.emission_factor_kg);
+      if (!factor) {
+        skippedMissingFactor += 1;
+        warnings.push({
+          transactionId: candidate.transaction_id,
+          partId: candidate.part_id,
+          partNumber: candidate.part_number,
+          code: 'MISSING_EMISSION_FACTOR',
+        });
+        continue;
+      }
+
+      const existing = await c.env.DB.prepare(`
+        SELECT
+          id,
+          activity_data,
+          emission_factor,
+          co2e_kg,
+          reporting_period_start,
+          reporting_period_end,
+          source_movement_type
+        FROM ghg_emission_entries
+        WHERE source_type = 'transaction'
+          AND transaction_id = ?
+          AND part_id = ?
+          AND calculation_method = ?
+          AND COALESCE(tenant_id, '') = COALESCE(?, '')
+          AND COALESCE(company_id, '') = COALESCE(?, '')
+        LIMIT 1
+      `).bind(
+        candidate.transaction_id,
+        candidate.part_id,
+        AVOIDED_EMISSIONS_METHOD,
+        candidate.tenant_id,
+        candidate.company_id,
+      ).first<ExistingAvoidedEntry>();
+
+      const co2eKg = quantity * factor;
+      const next = {
+        quantity,
+        factor,
+        co2eKg,
+        date: candidate.date,
+        movementType: candidate.movement_type,
+      };
+
+      if (existing && !valuesDiffer(existing, next)) {
+        alreadyExisting += 1;
+        continue;
+      }
+
+      if (existing) {
+        updated += 1;
+      } else {
+        created += 1;
+      }
+      avoidedCo2eKg += co2eKg;
+      if (dryRun) continue;
+
+      const id = crypto.randomUUID();
+
+      if (existing) {
+        await c.env.DB.prepare(`
+          UPDATE ghg_emission_entries
+          SET
+            created_by = ?,
+            source_description = ?,
+            activity_data = ?,
+            activity_unit = ?,
+            emission_factor = ?,
+            emission_factor_unit = ?,
+            emission_factor_source = ?,
+            co2e_kg = ?,
+            reporting_period_start = ?,
+            reporting_period_end = ?,
+            data_quality = ?,
+            methodology_notes = ?,
+            source_movement_type = ?,
+            updated_at = ?
+          WHERE id = ?
+        `).bind(
+          user.id,
+          `Avoided emissions from ${candidate.movement_type} transaction ${candidate.transaction_id}`,
+          quantity,
+          'unit',
+          factor,
+          'kgCO2e/unit',
+          'parts.emission_factor_kg',
+          co2eKg,
+          candidate.date,
+          candidate.date,
+          'estimated',
+          'Generated from transaction avoided emissions sync: avoided_co2e_kg = quantity * part.emission_factor_kg',
+          candidate.movement_type,
+          new Date().toISOString(),
+          existing.id,
+        ).run();
+      } else {
+        await c.env.DB.prepare(`
+          INSERT INTO ghg_emission_entries (
+            id, tenant_id, company_id, created_by, scope, category_id, scope3_stream,
+            source_description, activity_data, activity_unit,
+            emission_factor, emission_factor_unit, emission_factor_source,
+            co2e_kg, reporting_period_start, reporting_period_end,
+            data_quality, methodology_notes, source_type, transaction_id, part_id,
+            calculation_method, factor_source, source_movement_type
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          id,
+          candidate.tenant_id,
+          candidate.company_id,
+          user.id,
+          3,
+          null,
+          null,
+          `Avoided emissions from ${candidate.movement_type} transaction ${candidate.transaction_id}`,
+          quantity,
+          'unit',
+          factor,
+          'kgCO2e/unit',
+          'parts.emission_factor_kg',
+          co2eKg,
+          candidate.date,
+          candidate.date,
+          'estimated',
+          'Generated from transaction avoided emissions sync: avoided_co2e_kg = quantity * part.emission_factor_kg',
+          'transaction',
+          candidate.transaction_id,
+          candidate.part_id,
+          AVOIDED_EMISSIONS_METHOD,
+          'parts.emission_factor_kg',
+          candidate.movement_type,
+        ).run();
+      }
+    }
+
+    if (!dryRun && (created > 0 || updated > 0)) {
+      const scopeValues = scopeInsertValues(scopeContext, user);
+      await logAudit(
+        c.env.DB,
+        user.id,
+        'SYNC_AVOIDED_EMISSIONS',
+        'ghg_emission_entries',
+        transactionId || scopeValues.companyId || scopeValues.tenantId || 'carbon',
+        auditDetails({
+          transactionId,
+          periodStart,
+          periodEnd,
+          created,
+          updated,
+          skippedMissingFactor,
+          avoidedCo2eKg: roundedKg(avoidedCo2eKg),
+        }),
+        scopeValues.tenantId,
+        scopeValues.companyId,
+      );
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        dryRun,
+        transactionsScanned: scanned?.count || 0,
+        candidates: candidates.length,
+        created,
+        updated,
+        alreadyExisting,
+        skippedMissingFactor,
+        avoidedCo2eKg: roundedKg(avoidedCo2eKg),
+        warnings,
+      },
+      dry_run: dryRun,
+      scanned: candidates.length,
+      created,
+      updated,
+      already_existing: alreadyExisting,
+      skipped_missing_factor: skippedMissingFactor,
+      skipped_missing_part: skippedMissingPart,
+      skipped_invalid_quantity: skippedInvalidQuantity,
+      avoided_co2e_kg: roundedKg(avoidedCo2eKg),
+      warnings,
+    });
+  } catch (err: any) {
+    console.error('POST /ghg/avoided-emissions/sync error:', err);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+});
+
+// ============================================================================
 // DELETE /api/ghg/entries/:id
 // ============================================================================
 carbonRoutes.delete('/entries/:id', requirePermission(Permission.EDIT_CARBON), async (c) => {
   try {
+    const user = c.get('user');
     const scopeContext = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scopeContext, 'tenant_id', 'company_id');
-    const id = c.req.param('id');
-    const existing = await c.env.DB.prepare(`SELECT id FROM ghg_emission_entries WHERE id = ? AND ${scopeWhere.clause}`)
+    const id = c.req.param('id')!;
+    const existing = await c.env.DB.prepare(`
+      SELECT id, source_type, scope, category_id, co2e_kg, tenant_id, company_id
+      FROM ghg_emission_entries
+      WHERE id = ? AND ${scopeWhere.clause}
+    `)
       .bind(id, ...scopeWhere.params)
-      .first();
+      .first<{
+        id: string;
+        source_type: string | null;
+        scope: number;
+        category_id: number | null;
+        co2e_kg: number;
+        tenant_id: string | null;
+        company_id: string | null;
+      }>();
     if (!existing) return c.json({ error: 'Entry not found' }, 404);
 
     await c.env.DB.prepare(`DELETE FROM ghg_emission_entries WHERE id = ? AND ${scopeWhere.clause}`)
       .bind(id, ...scopeWhere.params)
       .run();
+    await logAudit(
+      c.env.DB,
+      user.id,
+      'DELETE_GHG_ENTRY',
+      'ghg_emission_entries',
+      id,
+      auditDetails({
+        sourceType: existing.source_type || 'manual',
+        scope: existing.scope,
+        category: existing.category_id,
+        co2eKg: existing.co2e_kg,
+      }),
+      existing.tenant_id,
+      existing.company_id,
+    );
     return c.json({ success: true });
   } catch (err: any) {
     console.error('DELETE /ghg/entries/:id error:', err);
@@ -181,37 +682,149 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
 
     const params: any[] = [];
     const conditions: string[] = [];
-    appendScopeCondition(conditions, params, scopeContext, 'tenant_id', 'company_id');
-    if (periodStart) { conditions.push('reporting_period_end >= ?'); params.push(periodStart); }
-    if (periodEnd) { conditions.push('reporting_period_start <= ?'); params.push(periodEnd); }
+    appendScopeCondition(conditions, params, scopeContext, 'e.tenant_id', 'e.company_id');
+    if (periodStart) { conditions.push('e.reporting_period_end >= ?'); params.push(periodStart); }
+    if (periodEnd) { conditions.push('e.reporting_period_start <= ?'); params.push(periodEnd); }
     const where = `WHERE ${conditions.join(' AND ')}`;
 
     const { results } = await c.env.DB.prepare(`
       SELECT
-        scope,
-        scope3_stream,
-        category_id,
+        e.scope,
+        e.scope3_stream,
+        e.category_id,
+        COALESCE(e.source_type, 'manual') as source_type,
+        COALESCE(e.source_movement_type, t.movement_type) as movement_type,
         COUNT(*) as entry_count,
-        SUM(co2e_kg) as total_co2e_kg,
-        SUM(activity_data) as total_activity
-      FROM ghg_emission_entries
+        SUM(e.co2e_kg) as total_co2e_kg,
+        SUM(e.activity_data) as total_activity
+      FROM ghg_emission_entries e
+      LEFT JOIN transactions t
+        ON t.id = e.transaction_id
+       AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
       ${where}
-      GROUP BY scope, scope3_stream, category_id
-      ORDER BY scope, category_id
+      GROUP BY e.scope, e.scope3_stream, e.category_id, source_type, movement_type
+      ORDER BY e.scope, e.category_id, source_type
     `).bind(...params).all();
 
-    // Overall totals
+    // Actual emissions are only manual entries. Transaction-generated avoided
+    // emissions are reported separately and never added to actual emissions.
     const totals = await c.env.DB.prepare(`
       SELECT
-        SUM(CASE WHEN scope = 1 THEN co2e_kg ELSE 0 END) as scope1_kg,
-        SUM(CASE WHEN scope = 2 THEN co2e_kg ELSE 0 END) as scope2_kg,
-        SUM(CASE WHEN scope = 3 THEN co2e_kg ELSE 0 END) as scope3_kg,
-        SUM(co2e_kg) as total_kg
-      FROM ghg_emission_entries
+        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 1 THEN e.co2e_kg ELSE 0 END), 0) as scope1_kg,
+        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 2 THEN e.co2e_kg ELSE 0 END), 0) as scope2_kg,
+        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 3 THEN e.co2e_kg ELSE 0 END), 0) as scope3_kg,
+        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' THEN e.co2e_kg ELSE 0 END), 0) as total_kg,
+        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' THEN e.co2e_kg ELSE 0 END), 0) as avoided_co2e_kg,
+        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' AND COALESCE(e.source_movement_type, t.movement_type) = 'Redeploy' THEN e.co2e_kg ELSE 0 END), 0) as avoided_redeploy_kg,
+        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' AND COALESCE(e.source_movement_type, t.movement_type) = 'Recycle' THEN e.co2e_kg ELSE 0 END), 0) as avoided_recycle_kg
+      FROM ghg_emission_entries e
+      LEFT JOIN transactions t
+        ON t.id = e.transaction_id
+       AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
       ${where}
     `).bind(...params).first();
 
-    return c.json({ success: true, breakdown: results || [], totals });
+    const actualBreakdown = await c.env.DB.prepare(`
+      SELECT
+        e.scope,
+        e.scope3_stream,
+        e.category_id,
+        COUNT(*) AS entry_count,
+        COALESCE(SUM(e.co2e_kg), 0) AS total_co2e_kg,
+        COALESCE(SUM(e.activity_data), 0) AS total_activity
+      FROM ghg_emission_entries e
+      ${where}
+        AND COALESCE(e.source_type, 'manual') = 'manual'
+      GROUP BY e.scope, e.scope3_stream, e.category_id
+      ORDER BY e.scope, e.category_id
+    `).bind(...params).all();
+
+    const actualCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) AS entry_count
+      FROM ghg_emission_entries e
+      ${where}
+        AND COALESCE(e.source_type, 'manual') = 'manual'
+    `).bind(...params).first<{ entry_count: number }>();
+
+    const avoidedCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) AS entry_count
+      FROM ghg_emission_entries e
+      ${where}
+        AND e.source_type = 'transaction'
+    `).bind(...params).first<{ entry_count: number }>();
+
+    const avoidedByMovement = await c.env.DB.prepare(`
+      SELECT
+        COALESCE(e.source_movement_type, t.movement_type, 'Unknown') AS movement_type,
+        COALESCE(SUM(e.co2e_kg), 0) AS co2e_kg,
+        COUNT(*) AS entry_count
+      FROM ghg_emission_entries e
+      LEFT JOIN transactions t
+        ON t.id = e.transaction_id
+       AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
+      ${where}
+        AND e.source_type = 'transaction'
+      GROUP BY movement_type
+      ORDER BY movement_type
+    `).bind(...params).all();
+
+    const avoidedByPart = await c.env.DB.prepare(`
+      SELECT
+        e.part_id,
+        p.part_number,
+        p.model_name AS part_name,
+        COALESCE(SUM(e.co2e_kg), 0) AS co2e_kg,
+        COALESCE(SUM(e.activity_data), 0) AS quantity,
+        COUNT(*) AS entry_count
+      FROM ghg_emission_entries e
+      LEFT JOIN parts p
+        ON p.id = e.part_id
+       AND (p.tenant_id = e.tenant_id OR (p.tenant_id IS NULL AND e.tenant_id IS NULL))
+       AND (p.company_id = e.company_id OR (p.company_id IS NULL AND e.company_id IS NULL))
+      ${where}
+        AND e.source_type = 'transaction'
+      GROUP BY e.part_id, p.part_number, p.model_name
+      ORDER BY co2e_kg DESC, p.part_number
+      LIMIT 20
+    `).bind(...params).all();
+
+    const t = totals as any;
+    const actualTotal = Number(t?.total_kg || 0);
+    const avoidedTotal = Number(t?.avoided_co2e_kg || 0);
+
+    return c.json({
+      success: true,
+      breakdown: results || [],
+      totals: {
+        scope1_kg: Number(t?.scope1_kg || 0),
+        scope2_kg: Number(t?.scope2_kg || 0),
+        scope3_kg: Number(t?.scope3_kg || 0),
+        total_kg: actualTotal,
+        avoided_co2e_kg: avoidedTotal,
+        avoided_redeploy_kg: Number(t?.avoided_redeploy_kg || 0),
+        avoided_recycle_kg: Number(t?.avoided_recycle_kg || 0),
+      },
+      actual: {
+        total_co2e_kg: actualTotal,
+        scope1_kg: Number(t?.scope1_kg || 0),
+        scope2_kg: Number(t?.scope2_kg || 0),
+        scope3_kg: Number(t?.scope3_kg || 0),
+        entry_count: actualCount?.entry_count || 0,
+        breakdown: actualBreakdown.results || [],
+      },
+      avoided: {
+        total_co2e_kg: avoidedTotal,
+        entry_count: avoidedCount?.entry_count || 0,
+        by_movement_type: avoidedByMovement.results || [],
+        by_part: avoidedByPart.results || [],
+      },
+      net: {
+        actual_minus_avoided_co2e_kg: actualTotal - avoidedTotal,
+      },
+    });
   } catch (err: any) {
     console.error('GET /ghg/report error:', err);
     return c.json({ error: 'Internal Server Error' }, 500);

@@ -59,6 +59,17 @@ interface CatalogPartRow {
   description?: string | null;
 }
 
+class ProjectValidationError extends Error {
+  constructor(
+    message: string,
+    readonly code = 'INVALID_PROJECT_REFERENCE',
+    readonly status = 400,
+  ) {
+    super(message);
+    this.name = 'ProjectValidationError';
+  }
+}
+
 type ImportedEquipmentRow = Record<string, unknown> & {
   part_id?: unknown;
   partId?: unknown;
@@ -247,6 +258,13 @@ function ownershipFromProject(project: ProjectScopeRow, user: User): { tenantId:
   };
 }
 
+function ownershipFromScope(scope: TenantScope, user: User): { tenantId: string | null; companyId: string | null } {
+  return {
+    tenantId: scope.tenantId || user.tenant_id || null,
+    companyId: scope.companyId || user.company_id || null,
+  };
+}
+
 function scopeFromOwnership(owner: { tenantId: string | null; companyId: string | null }): TenantScope {
   return {
     tenantId: owner.tenantId,
@@ -307,6 +325,43 @@ function lookupScope(scope: TenantScope): { clause: string; params: SQLValue[] }
     return { clause: '(tenant_id IS NULL OR tenant_id = ?)', params: [scope.tenantId] };
   }
   return { clause: '1=1', params: [] };
+}
+
+async function validateProjectWarehouse(
+  db: D1Database,
+  value: unknown,
+  owner: { tenantId: string | null; companyId: string | null },
+): Promise<string | null> {
+  const id = normalizeText(value, 160);
+  if (!id) return null;
+
+  const scopeWhere = scopedWhere(scopeFromOwnership(owner), 'tenant_id', 'company_id');
+  const row = await db.prepare(`SELECT id FROM warehouses WHERE id = ? AND ${scopeWhere.clause}`)
+    .bind(id, ...scopeWhere.params)
+    .first<{ id: string }>();
+  if (!row) throw new ProjectValidationError('Source warehouse not found in current scope', 'WAREHOUSE_NOT_FOUND', 400);
+  return id;
+}
+
+async function validateProjectLookupIds(
+  db: D1Database,
+  table: 'telecom_vendors' | 'telecom_technologies',
+  ids: string[],
+  label: 'Vendor' | 'Technology',
+  owner: { tenantId: string | null; companyId: string | null },
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+
+  const lookup = lookupScope(scopeFromOwnership(owner));
+  for (const id of ids) {
+    const row = await db.prepare(`SELECT id FROM ${table} WHERE id = ? AND ${lookup.clause}`)
+      .bind(id, ...lookup.params)
+      .first<{ id: string }>();
+    if (!row) {
+      throw new ProjectValidationError(`${label} not found in current scope`, `${label.toUpperCase()}_NOT_FOUND`, 400);
+    }
+  }
+  return ids;
 }
 
 async function getProject(c: ProjectContext, projectId: string) {
@@ -576,7 +631,25 @@ projectRoutes.post('/', async (c) => {
 
     const tenantId = scope.tenantId || user.tenant_id || null;
     const companyId = scope.companyId || user.company_id || null;
+    const ownership = ownershipFromScope(scope, user);
     const locationType = normalizeLocationType(body.location_type);
+    const sourceWarehouseId = locationType === 'on_site'
+      ? null
+      : await validateProjectWarehouse(c.env.DB, body.source_warehouse_id, ownership);
+    const vendorIds = await validateProjectLookupIds(
+      c.env.DB,
+      'telecom_vendors',
+      idArray(body.vendor_ids),
+      'Vendor',
+      ownership,
+    );
+    const technologyIds = await validateProjectLookupIds(
+      c.env.DB,
+      'telecom_technologies',
+      idArray(body.technology_ids),
+      'Technology',
+      ownership,
+    );
     const projectId = crypto.randomUUID();
     const now = new Date().toISOString();
 
@@ -602,7 +675,7 @@ projectRoutes.post('/', async (c) => {
         normalizeText(body.site_name, 200),
         normalizeText(body.site_id, 120),
         locationType,
-        locationType === 'on_site' ? null : normalizeText(body.source_warehouse_id, 160),
+        sourceWarehouseId,
         normalizeText(body.location_address, 500),
         locationType === 'on_site' ? parseBooleanFlag(body.requires_dismantling, 1) : 0,
         normalizeText(body.timeframe_start, 32),
@@ -629,11 +702,14 @@ projectRoutes.post('/', async (c) => {
       `).bind(crypto.randomUUID(), projectId, user.id, user.name, projectId),
     ]);
 
-    await replaceProjectLinks(c.env.DB, projectId, 'project_vendors', 'vendor_id', idArray(body.vendor_ids));
-    await replaceProjectLinks(c.env.DB, projectId, 'project_technologies', 'technology_id', idArray(body.technology_ids));
+    await replaceProjectLinks(c.env.DB, projectId, 'project_vendors', 'vendor_id', vendorIds);
+    await replaceProjectLinks(c.env.DB, projectId, 'project_technologies', 'technology_id', technologyIds);
     await logAudit(c.env.DB, user.id, 'CREATE_PROJECT', 'projects', projectId, name);
     return c.json({ success: true, id: projectId }, 201);
   } catch (err) {
+    if (err instanceof ProjectValidationError) {
+      return c.json({ success: false, error: err.message, code: err.code }, err.status as 400);
+    }
     console.error('POST /projects error:', err);
     return c.json({ success: false, error: 'Failed to create project' }, 500);
   }
@@ -661,6 +737,13 @@ projectRoutes.put('/:id', async (c) => {
     if (!project) return c.json({ success: false, error: 'Project not found' }, 404);
 
     const body = await c.req.json<IncomingBody>();
+    const ownership = ownershipFromProject(project, user);
+    const vendorIds = Object.prototype.hasOwnProperty.call(body, 'vendor_ids')
+      ? await validateProjectLookupIds(c.env.DB, 'telecom_vendors', idArray(body.vendor_ids), 'Vendor', ownership)
+      : null;
+    const technologyIds = Object.prototype.hasOwnProperty.call(body, 'technology_ids')
+      ? await validateProjectLookupIds(c.env.DB, 'telecom_technologies', idArray(body.technology_ids), 'Technology', ownership)
+      : null;
     const fields: string[] = [];
     const params: SQLValue[] = [];
 
@@ -689,8 +772,9 @@ projectRoutes.put('/:id', async (c) => {
       params.push(normalizeLocationType(body.location_type));
     }
     if (Object.prototype.hasOwnProperty.call(body, 'source_warehouse_id')) {
+      const sourceWarehouseId = await validateProjectWarehouse(c.env.DB, body.source_warehouse_id, ownership);
       fields.push('source_warehouse_id = ?');
-      params.push(normalizeText(body.source_warehouse_id, 160));
+      params.push(sourceWarehouseId);
     }
     if (Object.prototype.hasOwnProperty.call(body, 'requires_dismantling')) {
       fields.push('requires_dismantling = ?');
@@ -714,17 +798,20 @@ projectRoutes.put('/:id', async (c) => {
         .run();
     }
 
-    if (Object.prototype.hasOwnProperty.call(body, 'vendor_ids')) {
-      await replaceProjectLinks(c.env.DB, projectId, 'project_vendors', 'vendor_id', idArray(body.vendor_ids));
+    if (vendorIds) {
+      await replaceProjectLinks(c.env.DB, projectId, 'project_vendors', 'vendor_id', vendorIds);
     }
-    if (Object.prototype.hasOwnProperty.call(body, 'technology_ids')) {
-      await replaceProjectLinks(c.env.DB, projectId, 'project_technologies', 'technology_id', idArray(body.technology_ids));
+    if (technologyIds) {
+      await replaceProjectLinks(c.env.DB, projectId, 'project_technologies', 'technology_id', technologyIds);
     }
 
     await insertActivity(c.env.DB, projectId, user, 'updated');
     await logAudit(c.env.DB, user.id, 'UPDATE_PROJECT', 'projects', projectId);
     return c.json({ success: true });
   } catch (err) {
+    if (err instanceof ProjectValidationError) {
+      return c.json({ success: false, error: err.message, code: err.code }, err.status as 400);
+    }
     console.error('PUT /projects/:id error:', err);
     return c.json({ success: false, error: 'Failed to update project' }, 500);
   }

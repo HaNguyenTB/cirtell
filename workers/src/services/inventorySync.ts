@@ -167,6 +167,12 @@ function normalizeText(value: unknown): string | null {
 
 function ownershipClause(values: ScopeValues, alias = ''): { clause: string; params: SQLValue[] } {
   const prefix = alias ? `${alias}.` : '';
+  if (values.tenantId && values.companyId) {
+    return {
+      clause: `${prefix}tenant_id = ? AND ${prefix}company_id = ?`,
+      params: [values.tenantId, values.companyId],
+    };
+  }
   if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
   if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
   return { clause: '1=0', params: [] };
@@ -285,14 +291,100 @@ async function findInventoryRow(
   partId: string,
   condition: InventoryCondition,
 ): Promise<InventoryRow | null> {
-  const scoped = ownershipClause(ownership);
+  const bucket = inventoryBucketWhere(ownership, warehouseId, zoneId, partId, condition);
   const row = await db.prepare(`
     SELECT id, quantity FROM inventory
-    WHERE warehouse_id = ? AND part_id = ? AND COALESCE(zone_id, '') = COALESCE(?, '')
-      AND condition = ? AND ${scoped.clause}
+    WHERE ${bucket.clause}
     LIMIT 1
-  `).bind(warehouseId, partId, zoneId || '', condition, ...scoped.params).first<InventoryRow>();
+  `).bind(...bucket.params).first<InventoryRow>();
   return row || null;
+}
+
+function inventoryZoneClause(zoneId: string | null | undefined, alias = ''): { clause: string; params: SQLValue[] } {
+  const prefix = alias ? `${alias}.` : '';
+  if (zoneId === null || zoneId === undefined) return { clause: `${prefix}zone_id IS NULL`, params: [] };
+  return { clause: `${prefix}zone_id = ?`, params: [zoneId] };
+}
+
+function inventoryBucketWhere(
+  ownership: ScopeValues,
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+  alias = '',
+): { clause: string; params: SQLValue[] } {
+  const prefix = alias ? `${alias}.` : '';
+  const scoped = ownershipClause(ownership, alias);
+  const zone = inventoryZoneClause(zoneId, alias);
+  return {
+    clause: `${prefix}warehouse_id = ? AND ${prefix}part_id = ? AND ${prefix}condition = ? AND ${zone.clause} AND ${scoped.clause}`,
+    params: [warehouseId, partId, condition, ...zone.params, ...scoped.params],
+  };
+}
+
+function prepareInventoryBucketInsertIfMissing(
+  db: D1Database,
+  ownership: ScopeValues,
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+  now: string,
+): D1PreparedStatement {
+  return db.prepare(`
+    INSERT OR IGNORE INTO inventory (
+      id, tenant_id, company_id, warehouse_id, zone_id, part_id, quantity, condition, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+  `).bind(
+    crypto.randomUUID(),
+    ownership.tenantId,
+    ownership.companyId,
+    warehouseId,
+    zoneId ?? null,
+    partId,
+    condition,
+    now,
+  );
+}
+
+function prepareInventoryBucketUpdate(
+  db: D1Database,
+  ownership: ScopeValues,
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+  quantityDelta: number,
+  now: string,
+): D1PreparedStatement {
+  const bucket = inventoryBucketWhere(ownership, warehouseId, zoneId, partId, condition);
+  return db.prepare(`
+    UPDATE inventory
+    SET quantity = quantity + ?, updated_at = ?
+    WHERE ${bucket.clause}
+  `).bind(quantityDelta, now, ...bucket.params);
+}
+
+function appendInventoryBucketDeltaStatements(
+  db: D1Database,
+  statements: D1PreparedStatement[],
+  ownership: ScopeValues,
+  warehouseId: string,
+  zoneId: string | null | undefined,
+  partId: string,
+  condition: InventoryCondition,
+  quantityDelta: number,
+  now: string,
+): void {
+  if (quantityDelta > 0) {
+    statements.push(
+      prepareInventoryBucketInsertIfMissing(db, ownership, warehouseId, zoneId, partId, condition, now),
+    );
+  }
+  statements.push(
+    prepareInventoryBucketUpdate(db, ownership, warehouseId, zoneId, partId, condition, quantityDelta, now),
+  );
 }
 
 async function requireStock(
@@ -588,6 +680,64 @@ async function inventoryDeltasForMovements(
   return { prepared, deltas, idempotent };
 }
 
+function movementDeltasForPreparedMovement(movement: PreparedMovement): InventoryDelta[] {
+  const deltas: InventoryDelta[] = [];
+  if (movement.input.fromWarehouseId) {
+    deltas.push({
+      warehouseId: movement.input.fromWarehouseId,
+      zoneId: movement.input.fromZoneId || null,
+      partId: movement.input.partId,
+      condition: movement.condition,
+      quantityDelta: -movement.quantity,
+    });
+  }
+  if (movement.input.toWarehouseId) {
+    deltas.push({
+      warehouseId: movement.input.toWarehouseId,
+      zoneId: movement.input.toZoneId || null,
+      partId: movement.input.partId,
+      condition: movement.condition,
+      quantityDelta: movement.quantity,
+    });
+  }
+  return deltas;
+}
+
+async function assertMovementSequenceAvailable(
+  db: D1Database,
+  ownership: ScopeValues,
+  movements: PreparedMovement[],
+): Promise<void> {
+  const runningQuantities = new Map<string, number>();
+
+  for (const movement of movements) {
+    for (const delta of movementDeltasForPreparedMovement(movement)) {
+      const key = inventoryDeltaKey(delta.warehouseId, delta.zoneId, delta.partId, delta.condition);
+      let currentQuantity = runningQuantities.get(key);
+      if (currentQuantity === undefined) {
+        const row = await findInventoryRow(
+          db,
+          ownership,
+          delta.warehouseId,
+          delta.zoneId,
+          delta.partId,
+          delta.condition,
+        );
+        currentQuantity = row?.quantity || 0;
+      }
+
+      const nextQuantity = currentQuantity + delta.quantityDelta;
+      if (nextQuantity < 0) {
+        throw new InsufficientStockError(
+          `Insufficient stock for part ${delta.partId} in source warehouse`,
+        );
+      }
+
+      runningQuantities.set(key, nextQuantity);
+    }
+  }
+}
+
 async function assertInventoryDeltasAvailable(
   db: D1Database,
   ownership: ScopeValues,
@@ -618,7 +768,8 @@ export async function preflightInventoryMovements(
   inputs: InventoryMovementInput[],
   ownership: ScopeValues,
 ): Promise<void> {
-  const { deltas } = await inventoryDeltasForMovements(db, inputs, ownership);
+  const { prepared, deltas } = await inventoryDeltasForMovements(db, inputs, ownership);
+  await assertMovementSequenceAvailable(db, ownership, prepared);
   await assertInventoryDeltasAvailable(db, ownership, deltas);
 }
 
@@ -651,6 +802,7 @@ export async function prepareInventoryMovementBatch(
   const { prepared, deltas, idempotent } = await inventoryDeltasForMovements(db, inputs, ownership);
   if (prepared.length === 0) return { statements: [], movements: idempotent };
 
+  await assertMovementSequenceAvailable(db, ownership, prepared);
   await assertInventoryDeltasAvailable(db, ownership, deltas);
 
   const statements: D1PreparedStatement[] = [];
@@ -659,36 +811,31 @@ export async function prepareInventoryMovementBatch(
   for (const delta of deltas.values()) {
     if (delta.quantityDelta === 0) continue;
 
-    const row = await findInventoryRow(
-      db,
-      ownership,
-      delta.warehouseId,
-      delta.zoneId,
-      delta.partId,
-      delta.condition,
-    );
-
-    if (row) {
-      statements.push(
-        db.prepare('UPDATE inventory SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
-          .bind(delta.quantityDelta, updateNow, row.id),
+    if (delta.quantityDelta < 0) {
+      const row = await findInventoryRow(
+        db,
+        ownership,
+        delta.warehouseId,
+        delta.zoneId,
+        delta.partId,
+        delta.condition,
       );
-    } else if (delta.quantityDelta > 0) {
-      statements.push(
-        db.prepare(`
-          INSERT INTO inventory (id, tenant_id, company_id, warehouse_id, zone_id, part_id, quantity, condition, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          crypto.randomUUID(),
-          ownership.tenantId,
-          ownership.companyId,
-          delta.warehouseId,
-          delta.zoneId,
-          delta.partId,
-          delta.quantityDelta,
-          delta.condition,
-          updateNow,
-        ),
+      if (!row) {
+        throw new InsufficientStockError(`Insufficient stock for part ${delta.partId} in source warehouse`);
+      }
+    }
+
+    if (delta.quantityDelta > 0 || delta.quantityDelta < 0) {
+      appendInventoryBucketDeltaStatements(
+        db,
+        statements,
+        ownership,
+        delta.warehouseId,
+        delta.zoneId,
+        delta.partId,
+        delta.condition,
+        delta.quantityDelta,
+        updateNow,
       );
     } else {
       throw new InsufficientStockError(`Insufficient stock for part ${delta.partId} in source warehouse`);
@@ -751,38 +898,16 @@ async function applyDestinationIncrement(
 ): Promise<void> {
   if (!input.toWarehouseId) return;
 
-  const destination = await findInventoryRow(
+  appendInventoryBucketDeltaStatements(
     db,
+    statements,
     ownership,
     input.toWarehouseId,
     input.toZoneId,
     input.partId,
     condition,
-  );
-
-  if (destination) {
-    statements.push(
-      db.prepare('UPDATE inventory SET quantity = quantity + ?, updated_at = ? WHERE id = ?')
-        .bind(input.quantity, now, destination.id),
-    );
-    return;
-  }
-
-  statements.push(
-    db.prepare(`
-      INSERT INTO inventory (id, tenant_id, company_id, warehouse_id, zone_id, part_id, quantity, condition, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      crypto.randomUUID(),
-      ownership.tenantId,
-      ownership.companyId,
-      input.toWarehouseId,
-      input.toZoneId || null,
-      input.partId,
-      input.quantity,
-      condition,
-      now,
-    ),
+    input.quantity,
+    now,
   );
 }
 
@@ -814,9 +939,16 @@ export async function applyInventoryMovement(
   const statements: D1PreparedStatement[] = [];
 
   if (sourceInventory) {
-    statements.push(
-      db.prepare('UPDATE inventory SET quantity = quantity - ?, updated_at = ? WHERE id = ?')
-        .bind(quantity, now, sourceInventory.id),
+    appendInventoryBucketDeltaStatements(
+      db,
+      statements,
+      ownership,
+      normalizedInput.fromWarehouseId as string,
+      normalizedInput.fromZoneId,
+      input.partId,
+      condition,
+      -quantity,
+      now,
     );
   }
 

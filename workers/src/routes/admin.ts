@@ -42,6 +42,26 @@ function roleText(value: unknown): string | null {
   return ['Admin', 'User', 'Viewer'].includes(normalized) ? normalized : null;
 }
 
+function booleanFlag(value: unknown): number | null {
+  if (value === true || value === 1 || value === '1') return 1;
+  if (value === false || value === 0 || value === '0') return 0;
+  return null;
+}
+
+function changed<T>(current: T, next: T | undefined): boolean {
+  return next !== undefined && current !== next;
+}
+
+function securitySensitiveFieldsChanged(fields: string[]): boolean {
+  return fields.some((field) => [
+    'role',
+    'status',
+    'is_super_admin',
+    'tenant_id',
+    'company_id',
+  ].includes(field));
+}
+
 function scopeTenantCondition(user: User, alias = '') {
   const prefix = alias ? `${alias}.` : '';
   if (isSuperAdmin(user)) return { clause: '1=1', params: [] as string[] };
@@ -159,37 +179,84 @@ adminRoutes.patch('/users/:id', async (c) => safeHandle(async () => {
   const id = c.req.param('id');
   const body = await c.req.json();
 
-  const target = await c.env.DB.prepare('SELECT id, tenant_id, is_super_admin FROM users WHERE id = ?')
+  const target = await c.env.DB.prepare(`
+    SELECT id, name, role, status, tenant_id, company_id, is_super_admin, session_version
+    FROM users
+    WHERE id = ?
+  `)
     .bind(id)
-    .first<{ id: string; tenant_id: string | null; is_super_admin: number | null }>();
+    .first<{
+      id: string;
+      name: string;
+      role: string;
+      status: string;
+      tenant_id: string | null;
+      company_id: string | null;
+      is_super_admin: number | null;
+      session_version: number | null;
+    }>();
   if (!target) return c.json({ success: false, error: 'User not found' }, 404);
   if (!isSuperAdmin(adminUser) && target.tenant_id !== adminUser.tenant_id) {
     return c.json({ success: false, error: 'User not found' }, 404);
   }
-  if (id === adminUser.id && statusText(body.status) && statusText(body.status) !== 'active') {
-    return c.json({ success: false, error: 'You cannot deactivate your own account' }, 400);
-  }
 
   const updates: string[] = [];
   const params: Array<string | number | null> = [];
-  const nextRole = roleText(body.role);
-  const nextStatus = statusText(body.status);
-  const nextCompanyId = text(body.company_id);
-  const nextName = text(body.name);
+  const changedFields: string[] = [];
 
-  if (nextName) {
+  let nextName: string | undefined;
+  if (body.name !== undefined) {
+    nextName = text(body.name) || '';
+  }
+
+  let nextRole: string | undefined;
+  if (body.role !== undefined) {
+    nextRole = roleText(body.role) || undefined;
+    if (!nextRole) return c.json({ success: false, error: 'role must be Admin, User, or Viewer' }, 400);
+  }
+
+  let nextStatus: string | undefined;
+  if (body.status !== undefined) {
+    nextStatus = statusText(body.status) || undefined;
+    if (!nextStatus) return c.json({ success: false, error: 'status must be active, suspended, or deleted' }, 400);
+  }
+
+  if (id === adminUser.id && nextStatus && nextStatus !== 'active' && nextStatus !== target.status) {
+    return c.json({ success: false, error: 'You cannot deactivate your own account' }, 400);
+  }
+
+  if (nextName !== undefined && target.name !== nextName) {
     updates.push('name = ?');
     params.push(nextName);
+    changedFields.push('name');
   }
-  if (nextRole) {
+  if (nextRole !== undefined && target.role !== nextRole) {
     updates.push('role = ?');
     params.push(nextRole);
+    changedFields.push('role');
   }
-  if (nextStatus) {
+  if (nextStatus !== undefined && target.status !== nextStatus) {
     updates.push('status = ?');
     params.push(nextStatus);
+    changedFields.push('status');
   }
+
+  let nextTenantId: string | undefined;
+  if (body.tenant_id !== undefined) {
+    nextTenantId = text(body.tenant_id) || '';
+    if (!nextTenantId) return c.json({ success: false, error: 'Tenant is required' }, 400);
+    const tenant = await c.env.DB.prepare('SELECT id FROM tenants WHERE id = ? AND is_active = 1')
+      .bind(nextTenantId)
+      .first<{ id: string }>();
+    if (!tenant) return c.json({ success: false, error: 'Tenant not found' }, 400);
+    if (!isSuperAdmin(adminUser) && nextTenantId !== adminUser.tenant_id) {
+      return c.json({ success: false, error: 'Tenant not found' }, 400);
+    }
+  }
+
+  let nextCompanyId: string | null | undefined;
   if (body.company_id !== undefined) {
+    nextCompanyId = text(body.company_id);
     if (nextCompanyId) {
       const company = await c.env.DB.prepare('SELECT id, tenant_id FROM companies WHERE id = ?')
         .bind(nextCompanyId)
@@ -198,28 +265,99 @@ adminRoutes.patch('/users/:id', async (c) => safeHandle(async () => {
       if (!isSuperAdmin(adminUser) && company.tenant_id !== adminUser.tenant_id) {
         return c.json({ success: false, error: 'Company not found' }, 400);
       }
-      updates.push('company_id = ?', 'tenant_id = ?');
-      params.push(company.id, company.tenant_id);
+      if (nextTenantId && nextTenantId !== company.tenant_id) {
+        return c.json({ success: false, error: 'Company does not belong to selected tenant' }, 400);
+      }
+      nextTenantId = company.tenant_id;
+      nextCompanyId = company.id;
     } else {
-      updates.push('company_id = ?');
-      params.push(null);
+      nextCompanyId = null;
     }
   }
+
+  if (changed(target.company_id, nextCompanyId)) {
+    updates.push('company_id = ?');
+    params.push(nextCompanyId ?? null);
+    changedFields.push('company_id');
+  }
+  if (changed(target.tenant_id, nextTenantId)) {
+    updates.push('tenant_id = ?');
+    params.push(nextTenantId || null);
+    changedFields.push('tenant_id');
+    if (body.company_id === undefined && target.company_id) {
+      const currentCompany = await c.env.DB.prepare('SELECT tenant_id FROM companies WHERE id = ?')
+        .bind(target.company_id)
+        .first<{ tenant_id: string }>();
+      if (currentCompany && currentCompany.tenant_id !== nextTenantId && !changedFields.includes('company_id')) {
+        updates.push('company_id = ?');
+        params.push(null);
+        changedFields.push('company_id');
+      }
+    }
+  }
+
   if (body.is_super_admin !== undefined) {
     if (!isSuperAdmin(adminUser)) {
       return c.json({ success: false, error: 'Only SuperAdmin can change platform admin access' }, 403);
     }
-    updates.push('is_super_admin = ?');
-    params.push(body.is_super_admin === true || body.is_super_admin === 1 ? 1 : 0);
+    const nextSuperAdmin = booleanFlag(body.is_super_admin);
+    if (nextSuperAdmin === null) {
+      return c.json({ success: false, error: 'is_super_admin must be boolean' }, 400);
+    }
+    if ((target.is_super_admin || 0) !== nextSuperAdmin) {
+      updates.push('is_super_admin = ?');
+      params.push(nextSuperAdmin);
+      changedFields.push('is_super_admin');
+    }
   }
 
-  if (updates.length === 0) return c.json({ success: false, error: 'No fields to update' }, 400);
+  if (updates.length === 0) {
+    return c.json({ success: true, changedFields: [], sessionRevoked: false });
+  }
+
+  const shouldRevokeSessions = securitySensitiveFieldsChanged(changedFields);
+  updates.push('session_version = CASE WHEN ? THEN COALESCE(session_version, 0) + 1 ELSE COALESCE(session_version, 0) END');
+  params.push(shouldRevokeSessions ? 1 : 0);
   updates.push('updated_at = ?');
   params.push(new Date().toISOString(), id);
 
   await c.env.DB.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
-  await logAudit(c.env.DB, adminUser.id, 'UPDATE_USER', 'users', id, JSON.stringify({ fields: Object.keys(body) }));
-  return c.json({ success: true });
+  const updated = await c.env.DB.prepare('SELECT session_version FROM users WHERE id = ?')
+    .bind(id)
+    .first<{ session_version: number }>();
+  const resultingSessionVersion = updated?.session_version ?? target.session_version ?? 0;
+
+  const details: Record<string, unknown> = {
+    targetUserId: id,
+    changedFields,
+    sessionRevoked: shouldRevokeSessions,
+    resultingSessionVersion,
+  };
+  if (changedFields.includes('role')) {
+    details.oldRole = target.role;
+    details.newRole = nextRole;
+  }
+  if (changedFields.includes('status')) {
+    details.oldStatus = target.status;
+    details.newStatus = nextStatus;
+  }
+
+  await logAudit(
+    c.env.DB,
+    adminUser.id,
+    'UPDATE_USER',
+    'users',
+    id,
+    JSON.stringify(details),
+    target.tenant_id,
+    target.company_id,
+  );
+  return c.json({
+    success: true,
+    changedFields,
+    sessionRevoked: shouldRevokeSessions,
+    sessionVersion: resultingSessionVersion,
+  });
 }, c));
 
 adminRoutes.get('/audit-log', async (c) => safeHandle(async () => {

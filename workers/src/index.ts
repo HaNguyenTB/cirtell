@@ -46,16 +46,28 @@ app.use('*', async (c, next) => {
 
 const STANDARD_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
 const EVIDENCE_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
+const TRANSACTION_PO_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
 
-// Body size limit. Evidence files are stored in R2, so they get a larger cap.
+// Body size limit. Evidence files are stored in R2, and transaction PO files
+// are stored in D1 BLOBs with their own tighter cap.
 app.use('*', async (c, next) => {
   const contentLength = c.req.header('Content-Length');
   const path = new URL(c.req.url).pathname;
+  const isTransactionPoUpload = c.req.method === 'POST' && /^\/api\/transactions\/[^/]+\/po-upload$/.test(path);
   const limit = c.req.method === 'POST' && /^\/api\/projects\/[^/]+\/evidence$/.test(path)
     ? EVIDENCE_BODY_LIMIT_BYTES
-    : STANDARD_BODY_LIMIT_BYTES;
+    : isTransactionPoUpload
+      ? TRANSACTION_PO_BODY_LIMIT_BYTES
+      : STANDARD_BODY_LIMIT_BYTES;
 
   if (contentLength && parseInt(contentLength, 10) > limit) {
+    if (isTransactionPoUpload) {
+      return c.json({
+        success: false,
+        error: 'Purchase order file exceeds the 10 MB limit',
+        code: 'PO_FILE_TOO_LARGE',
+      }, 413);
+    }
     const limitMb = Math.floor(limit / 1024 / 1024);
     return c.json({ success: false, error: `Request body too large. Maximum size is ${limitMb} MB.` }, 413);
   }

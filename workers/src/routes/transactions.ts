@@ -10,9 +10,11 @@ import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
 import {
   allocateTransactionInventoryMovements,
+  type AppliedInventoryMovement,
   buildTransactionInventoryMovements,
   buildTransactionReversalMovements,
   InventorySyncError,
+  type PreparedInventoryMovementBatch,
   prepareInventoryMovementBatch,
   preflightInventoryMovements,
   type InventoryMovementInput,
@@ -105,13 +107,34 @@ interface UploadedFile {
 }
 
 class ValidationError extends Error {
-  constructor(message: string) {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status = 400, code?: string) {
     super(message);
     this.name = 'ValidationError';
+    this.status = status;
+    this.code = code;
   }
 }
 
 const MOVEMENT_TYPES = ['Purchase', 'Sale', 'Redeploy', 'Recycle'] as const;
+const TRANSACTION_PO_FILE_LIMIT_BYTES = 10 * 1024 * 1024;
+const PO_FILE_TOO_LARGE_RESPONSE = {
+  success: false,
+  error: 'Purchase order file exceeds the 10 MB limit',
+  code: 'PO_FILE_TOO_LARGE',
+};
+const ALLOWED_PO_CONTENT_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+const ALLOWED_PO_EXTENSIONS = new Set(['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx']);
 
 export const transactionsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -157,7 +180,13 @@ function requireMovementType(value: unknown): string {
 }
 
 function safeFileName(name: string): string {
-  return name.replace(/[^\w.\- ]+/g, '').trim() || 'purchase-order';
+  const base = name.split(/[\\/]/).pop() || '';
+  return base
+    .replace(/[\r\n]/g, '')
+    .replace(/[^\w.\- \u0080-\uFFFF]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'purchase-order';
 }
 
 function isUploadedFile(value: unknown): value is UploadedFile {
@@ -168,27 +197,185 @@ function isUploadedFile(value: unknown): value is UploadedFile {
     && typeof candidate.arrayBuffer === 'function';
 }
 
-async function findOrCreateVendor(db: D1Database, vendorName: unknown): Promise<string | null> {
+function fileExtension(fileName: string): string {
+  const match = /\.([^.]+)$/.exec(fileName);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function isAllowedPoContentType(contentType: string, fileName: string): boolean {
+  const normalized = contentType.toLowerCase();
+  if (ALLOWED_PO_CONTENT_TYPES.has(normalized)) return true;
+  return normalized === 'application/octet-stream' && ALLOWED_PO_EXTENSIONS.has(fileExtension(fileName));
+}
+
+function validatePoFile(file: UploadedFile): { fileName: string; contentType: string } {
+  const fileName = safeFileName(file.name);
+  const contentType = normalizeText(file.type)?.toLowerCase() || 'application/octet-stream';
+
+  if (!normalizeText(file.name)) {
+    throw new ValidationError('Purchase order filename is required', 400, 'PO_FILE_NAME_REQUIRED');
+  }
+  if (!file.size || file.size <= 0) {
+    throw new ValidationError('Purchase order file is empty', 400, 'PO_FILE_EMPTY');
+  }
+  if (file.size > TRANSACTION_PO_FILE_LIMIT_BYTES) {
+    throw new ValidationError(PO_FILE_TOO_LARGE_RESPONSE.error, 413, PO_FILE_TOO_LARGE_RESPONSE.code);
+  }
+  if (!isAllowedPoContentType(contentType, fileName)) {
+    throw new ValidationError(
+      'Purchase order file type is not allowed',
+      415,
+      'PO_FILE_TYPE_NOT_ALLOWED',
+    );
+  }
+
+  return { fileName, contentType };
+}
+
+function rfc5987Encode(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function contentDispositionAttachment(fileName: string): string {
+  const sanitized = safeFileName(fileName);
+  const fallback = sanitized.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '').trim() || 'purchase-order';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${rfc5987Encode(sanitized)}`;
+}
+
+async function blobBytes(value: unknown): Promise<Uint8Array> {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    return new Uint8Array(await value.arrayBuffer());
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  if (typeof value === 'string') return new TextEncoder().encode(value);
+  throw new Error('Unexpected D1 BLOB type');
+}
+
+async function findOrCreateVendor(db: D1Database, vendorName: unknown, ownership: ScopeValues): Promise<string | null> {
   const name = normalizeText(vendorName);
   if (!name) return null;
 
+  const ownerWhere = ownershipClause(ownership);
   const existing = await db.prepare(
-    'SELECT id FROM vendors WHERE LOWER(vendor_name) = LOWER(?)',
-  ).bind(name).first<{ id: string }>();
+    `SELECT id FROM vendors WHERE LOWER(TRIM(vendor_name)) = LOWER(TRIM(?)) AND ${ownerWhere.clause}`,
+  ).bind(name, ...ownerWhere.params).first<{ id: string }>();
   if (existing) return existing.id;
 
   const id = crypto.randomUUID();
-  await db.prepare(
-    'INSERT INTO vendors (id, vendor_name, created_at) VALUES (?, ?, ?)',
-  ).bind(id, name, new Date().toISOString()).run();
+  try {
+    await db.prepare(
+      'INSERT INTO vendors (id, tenant_id, company_id, vendor_name, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(id, ownership.tenantId, ownership.companyId, name, new Date().toISOString()).run();
+  } catch (err) {
+    if (isUniqueConstraintError(err, ['ux_vendors_scope_name'])) {
+      throw new ValidationError(
+        'Vendor already exists in the current company',
+        409,
+        'DUPLICATE_VENDOR_NAME',
+      );
+    }
+    throw err;
+  }
   return id;
 }
 
 function ownershipClause(values: ScopeValues, alias = ''): { clause: string; params: SQLValue[] } {
   const prefix = alias ? `${alias}.` : '';
+  if (values.tenantId && values.companyId) {
+    return {
+      clause: `${prefix}tenant_id = ? AND ${prefix}company_id = ?`,
+      params: [values.tenantId, values.companyId],
+    };
+  }
   if (values.companyId) return { clause: `${prefix}company_id = ?`, params: [values.companyId] };
   if (values.tenantId) return { clause: `${prefix}tenant_id = ?`, params: [values.tenantId] };
   return { clause: '1=0', params: [] };
+}
+
+function isUniqueConstraintError(err: unknown, indexNames: string[]): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return lower.includes('unique constraint')
+    || indexNames.some((name) => lower.includes(name.toLowerCase()));
+}
+
+function auditDetails(details: Record<string, unknown>): string {
+  return JSON.stringify(details);
+}
+
+function auditInsertStatement(
+  db: D1Database,
+  userId: string,
+  action: string,
+  resource: string,
+  resourceId: string,
+  ownership: ScopeValues,
+  details?: string | null,
+): D1PreparedStatement {
+  return db.prepare(`
+    INSERT INTO audit_log (
+      id, user_id, action, resource_type, resource_id, details, created_at, tenant_id, company_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    crypto.randomUUID(),
+    userId,
+    action,
+    resource,
+    resourceId,
+    details || null,
+    new Date().toISOString(),
+    ownership.tenantId,
+    ownership.companyId,
+  );
+}
+
+function automaticMovementAuditStatements(
+  db: D1Database,
+  userId: string,
+  ownership: ScopeValues,
+  transactionId: string,
+  movements: AppliedInventoryMovement[],
+  phase: 'create' | 'update' | 'void' | 'backfill',
+): D1PreparedStatement[] {
+  return movements
+    .filter((movement) => !movement.idempotent)
+    .map((movement) => auditInsertStatement(
+      db,
+      userId,
+      'INVENTORY_MOVE_AUTO',
+      'inventory_movements',
+      movement.id,
+      ownership,
+      auditDetails({ transactionId, phase }),
+    ));
+}
+
+async function logTransactionStockSyncFailed(
+  db: D1Database,
+  user: User | null,
+  transactionId: string | null,
+  ownership: ScopeValues | null,
+  err: InventorySyncError,
+): Promise<void> {
+  if (!user || !transactionId || !ownership) return;
+  try {
+    await auditInsertStatement(
+      db,
+      user.id,
+      'TRANSACTION_STOCK_SYNC_FAILED',
+      'transactions',
+      transactionId,
+      ownership,
+      auditDetails({ code: err.code, status: err.status, message: err.message }),
+    ).run();
+  } catch (auditErr) {
+    console.error('Transaction stock sync failure audit failed:', auditErr);
+  }
 }
 
 function requireTransactionScope(ownership: ScopeValues): ScopeValues {
@@ -223,36 +410,47 @@ async function resolvePart(
   if (!partNumber) return null;
 
   const existing = await db.prepare(
-    `SELECT id FROM parts WHERE LOWER(part_number) = LOWER(?) AND ${ownerWhere.clause}`,
+    `SELECT id FROM parts WHERE LOWER(TRIM(part_number)) = LOWER(TRIM(?)) AND ${ownerWhere.clause}`,
   ).bind(partNumber, ...ownerWhere.params).first<{ id: string }>();
   if (existing) return existing.id;
   if (!createIfMissing) return null;
 
-  const vendorId = await findOrCreateVendor(db, firstDefined(input, ['vendor', 'companyName']) ?? fallbackVendor);
+  const vendorId = await findOrCreateVendor(db, firstDefined(input, ['vendor', 'companyName']) ?? fallbackVendor, ownership);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const partName = normalizeText(firstDefined(input, ['part_name', 'partName', 'model_name', 'modelName'])) || partNumber;
   const technology = normalizeText(firstDefined(input, ['technology', 'technology_type', 'technologyType']));
   const category = normalizeText(firstDefined(input, ['category'])) || 'Network Equipment';
 
-  await db.prepare(`
-    INSERT INTO parts (
-        id, tenant_id, company_id, part_number, model_name, vendor_id, technology_type, category,
-        needs_review, review_notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-  `).bind(
-    id,
-    ownership.tenantId,
-    ownership.companyId,
-    partNumber,
-    partName,
-    vendorId,
-    technology,
-    category,
-    'Created from transaction entry',
-    now,
-    now,
-  ).run();
+  try {
+    await db.prepare(`
+      INSERT INTO parts (
+          id, tenant_id, company_id, part_number, model_name, vendor_id, technology_type, category,
+          needs_review, review_notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).bind(
+      id,
+      ownership.tenantId,
+      ownership.companyId,
+      partNumber,
+      partName,
+      vendorId,
+      technology,
+      category,
+      'Created from transaction entry',
+      now,
+      now,
+    ).run();
+  } catch (err) {
+    if (isUniqueConstraintError(err, ['ux_parts_scope_part_number'])) {
+      throw new ValidationError(
+        'Part number already exists in the current company',
+        409,
+        'DUPLICATE_PART_NUMBER',
+      );
+    }
+    throw err;
+  }
 
   return id;
 }
@@ -279,7 +477,7 @@ async function validateContact(db: D1Database, value: unknown, ownership: ScopeV
   return id;
 }
 
-async function validateMarket(db: D1Database, value: unknown, useDefault: boolean, ownership: ScopeValues): Promise<string | null> {
+async function validateMarketId(db: D1Database, value: unknown, ownership: ScopeValues): Promise<string | null> {
   const ownerWhere = ownershipClause(ownership);
   const id = normalizeText(value);
   if (id) {
@@ -290,11 +488,66 @@ async function validateMarket(db: D1Database, value: unknown, useDefault: boolea
     return id;
   }
 
+  return null;
+}
+
+async function findOrCreateMarketByName(db: D1Database, value: unknown, ownership: ScopeValues): Promise<string | null> {
+  const marketName = normalizeText(value);
+  if (!marketName) return null;
+
+  const ownerWhere = ownershipClause(ownership);
+  const existing = await db.prepare(`
+    SELECT id
+    FROM markets
+    WHERE LOWER(TRIM(market_name)) = LOWER(TRIM(?))
+      AND ${ownerWhere.clause}
+  `).bind(marketName, ...ownerWhere.params).first<{ id: string }>();
+  if (existing) return existing.id;
+
+  const id = `market_${crypto.randomUUID()}`;
+  try {
+    await db.prepare(`
+      INSERT INTO markets (id, tenant_id, company_id, market_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(id, ownership.tenantId, ownership.companyId, marketName, new Date().toISOString(), new Date().toISOString()).run();
+  } catch (err) {
+    if (isUniqueConstraintError(err, ['ux_markets_scope_name'])) {
+      throw new ValidationError(
+        'Market already exists in the current company',
+        409,
+        'DUPLICATE_MARKET_NAME',
+      );
+    }
+    throw err;
+  }
+
+  return id;
+}
+
+async function resolveMarket(db: D1Database, body: IncomingBody, useDefault: boolean, ownership: ScopeValues): Promise<string | null> {
+  const marketId = firstDefined(body, ['market_id', 'marketId']);
+  if (marketId !== undefined) return validateMarketId(db, marketId, ownership);
+
+  const marketName = firstDefined(body, ['market_name', 'marketName', 'market']);
+  if (marketName !== undefined) return findOrCreateMarketByName(db, marketName, ownership);
+
   if (!useDefault) return null;
+  const ownerWhere = ownershipClause(ownership);
   const fallback = await db.prepare(
     `SELECT id FROM markets WHERE ${ownerWhere.clause} ORDER BY CASE WHEN id = 'global' THEN 0 ELSE 1 END, market_name LIMIT 1`,
   ).bind(...ownerWhere.params).first<{ id: string }>();
   return fallback?.id || null;
+}
+
+async function validateProject(db: D1Database, value: unknown, ownership: ScopeValues): Promise<string | null> {
+  const id = normalizeText(value);
+  if (!id) return null;
+  const ownerWhere = ownershipClause(ownership);
+  const row = await db.prepare(`SELECT id FROM projects WHERE id = ? AND ${ownerWhere.clause}`)
+    .bind(id, ...ownerWhere.params)
+    .first<{ id: string }>();
+  if (!row) throw new ValidationError('Project not found');
+  return id;
 }
 
 function incomingItems(body: IncomingBody): IncomingBody[] {
@@ -1024,6 +1277,14 @@ transactionsRoutes.post('/inventory-backfill', requirePermission(Permission.MANA
               updated_at = ?
           WHERE id = ? AND ${updateScope.clause}
         `).bind(nextSyncVersion, now, now, transaction.id, ...updateScope.params),
+        ...automaticMovementAuditStatements(
+          c.env.DB,
+          user.id,
+          ownership,
+          transaction.id,
+          inventoryBatch.movements,
+          'backfill',
+        ),
       ]);
 
       result.applied = true;
@@ -1077,43 +1338,76 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
     const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
       .bind(id, ...scopeWhere.params)
       .first<{ id: string }>();
-    if (!existing) return c.json({ success: false, error: 'Transaction not found' }, 404);
+    if (!existing) return c.json({ success: false, error: 'Transaction not found', code: 'TRANSACTION_NOT_FOUND' }, 404);
+
+    const existingFile = await c.env.DB.prepare(
+      'SELECT transaction_id FROM transaction_po_files WHERE transaction_id = ?',
+    ).bind(id).first<{ transaction_id: string }>();
 
     const formData = await c.req.formData();
     const file = formData.get('file');
     if (!isUploadedFile(file)) {
-      return c.json({ success: false, error: 'PO file is required' }, 400);
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      return c.json({ success: false, error: 'PO file must be 10 MB or smaller' }, 400);
+      return c.json({ success: false, error: 'Purchase order file is required', code: 'PO_FILE_REQUIRED' }, 400);
     }
 
-    const fileName = safeFileName(file.name);
-    const contentType = file.type || 'application/octet-stream';
-    const fileData = await file.arrayBuffer();
+    const { fileName, contentType } = validatePoFile(file);
+    const fileData = new Uint8Array(await file.arrayBuffer());
     const now = new Date().toISOString();
+    const poFileKey = `d1:${id}`;
 
-    await c.env.DB.prepare(`
-      INSERT INTO transaction_po_files (
-        transaction_id, file_name, content_type, file_data, uploaded_by, uploaded_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(transaction_id) DO UPDATE SET
-        file_name = excluded.file_name,
-        content_type = excluded.content_type,
-        file_data = excluded.file_data,
-        uploaded_by = excluded.uploaded_by,
-        uploaded_at = excluded.uploaded_at
-    `).bind(id, fileName, contentType, fileData, user.id, now).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        INSERT INTO transaction_po_files (
+          transaction_id, file_name, content_type, file_data, uploaded_by, uploaded_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(transaction_id) DO UPDATE SET
+          file_name = excluded.file_name,
+          content_type = excluded.content_type,
+          file_data = excluded.file_data,
+          uploaded_by = excluded.uploaded_by,
+          uploaded_at = excluded.uploaded_at
+      `).bind(id, fileName, contentType, fileData, user.id, now),
+      c.env.DB.prepare(`
+        UPDATE transactions
+        SET po_file_key = ?, po_file_name = ?, updated_at = ?
+        WHERE id = ? AND ${scopeWhere.clause}
+      `).bind(poFileKey, fileName, now, id, ...scopeWhere.params),
+    ]);
 
-    await c.env.DB.prepare(`
-      UPDATE transactions
-      SET po_file_key = ?, po_file_name = ?, updated_at = ?
-      WHERE id = ?
-    `).bind(id, fileName, now, id).run();
-
-    await logAudit(c.env.DB, user.id, 'UPLOAD_TRANSACTION_PO', 'transactions', id, fileName);
-    return c.json({ success: true, fileName });
+    const replacedExistingFile = Boolean(existingFile);
+    await logAudit(
+      c.env.DB,
+      user.id,
+      'UPLOAD_TRANSACTION_PO',
+      'transaction',
+      id,
+      auditDetails({
+        fileName,
+        contentType,
+        sizeBytes: file.size,
+        replacedExistingFile,
+      }),
+      scope.tenantId,
+      scope.companyId,
+    );
+    return c.json({
+      success: true,
+      data: {
+        transactionId: id,
+        fileName,
+        contentType,
+        sizeBytes: file.size,
+        uploadedAt: now,
+        replaced: replacedExistingFile,
+      },
+    }, replacedExistingFile ? 200 : 201);
   } catch (err) {
+    if (err instanceof ValidationError) {
+      if (err.code === PO_FILE_TOO_LARGE_RESPONSE.code) {
+        return c.json(PO_FILE_TOO_LARGE_RESPONSE, 413);
+      }
+      return c.json({ success: false, error: err.message, code: err.code }, err.status as 400 | 413 | 415);
+    }
     console.error('POST /transactions/:id/po-upload error:', err);
     return c.json({ success: false, error: 'Failed to upload PO file' }, 500);
   }
@@ -1125,23 +1419,38 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
 transactionsRoutes.get('/:id/po-download', requirePermission(Permission.VIEW_TRANSACTIONS), async (c) => {
   try {
     const scope = await resolveTenantScope(c);
-    const scopeWhere = scopedWhere(scope, 't.tenant_id', 't.company_id');
+    const transactionScope = scopedWhere(scope, 'tenant_id', 'company_id');
+    const fileScope = scopedWhere(scope, 't.tenant_id', 't.company_id');
     const id = c.req.param('id')!;
+    const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${transactionScope.clause}`)
+      .bind(id, ...transactionScope.params)
+      .first<{ id: string }>();
+    if (!existing) return c.json({ success: false, error: 'Transaction not found', code: 'TRANSACTION_NOT_FOUND' }, 404);
+
     const row = await c.env.DB.prepare(`
       SELECT pf.file_name AS fileName, pf.content_type AS contentType, pf.file_data AS fileData
       FROM transaction_po_files pf
       JOIN transactions t ON t.id = pf.transaction_id
-      WHERE pf.transaction_id = ? AND ${scopeWhere.clause}
-    `).bind(id, ...scopeWhere.params).first<{ fileName: string; contentType: string; fileData: ArrayBuffer }>();
+      WHERE pf.transaction_id = ? AND ${fileScope.clause}
+    `).bind(id, ...fileScope.params).first<{ fileName: string; contentType: string; fileData: unknown }>();
 
-    if (!row) return c.json({ success: false, error: 'PO file not found' }, 404);
+    if (!row) {
+      return c.json({
+        success: false,
+        error: 'Purchase order file not found',
+        code: 'PO_FILE_NOT_FOUND',
+      }, 404);
+    }
 
-    return new Response(row.fileData, {
-      headers: {
-        'Content-Type': row.contentType || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${safeFileName(row.fileName)}"`,
-      },
-    });
+    const bytes = await blobBytes(row.fileData);
+    const headers = new Headers();
+    headers.set('Content-Type', row.contentType || 'application/octet-stream');
+    headers.set('Content-Length', String(bytes.byteLength));
+    headers.set('Content-Disposition', contentDispositionAttachment(row.fileName || 'purchase-order'));
+    headers.set('Cache-Control', 'private, no-store');
+    headers.set('X-Content-Type-Options', 'nosniff');
+
+    return new Response(bytes, { headers });
   } catch (err) {
     console.error('GET /transactions/:id/po-download error:', err);
     return c.json({ success: false, error: 'Failed to download PO file' }, 500);
@@ -1174,10 +1483,15 @@ transactionsRoutes.get('/:id', requirePermission(Permission.VIEW_TRANSACTIONS), 
 // POST /api/transactions - create
 // ============================================================================
 transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
+  let auditUser: User | null = null;
+  let auditOwnership: ScopeValues | null = null;
+  let auditTransactionId: string | null = null;
   try {
     const user = c.get('user');
+    auditUser = user;
     const scope = await resolveTenantScope(c);
     const ownership = requireTransactionScope(scopeInsertValues(scope, user));
+    auditOwnership = ownership;
     const body = await c.req.json<IncomingBody>();
 
     const date = normalizeText(firstDefined(body, ['date']));
@@ -1197,8 +1511,9 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       'Destination',
       ownership,
     );
-    const marketId = await validateMarket(c.env.DB, firstDefined(body, ['market_id', 'marketId']), true, ownership);
+    const marketId = await resolveMarket(c.env.DB, body, true, ownership);
     const contactId = await validateContact(c.env.DB, firstDefined(body, ['contact_id', 'contactId']), ownership);
+    const projectId = await validateProject(c.env.DB, firstDefined(body, ['project_id', 'projectId']), ownership);
     const createMissingParts = movementType === 'Purchase';
     let partId = await resolvePart(c.env.DB, body, vendor, ownership, createMissingParts);
     const lineItems = await prepareLineItems(
@@ -1228,6 +1543,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
     }
 
     const id = crypto.randomUUID();
+    auditTransactionId = id;
     const now = new Date().toISOString();
     const headerCondition = normalizeText(firstDefined(body, ['condition']));
     const syncPlan = buildTransactionInventoryMovements({
@@ -1300,7 +1616,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       marketId,
       sourceWarehouseId,
       destinationWarehouseId,
-      normalizeText(firstDefined(body, ['project_id', 'projectId'])),
+      projectId,
       contactId,
       user.id,
       now,
@@ -1315,10 +1631,25 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       statements.push(lineItemInsertStatement(c.env.DB, id, item, now, ownership));
     }
     statements.push(...inventoryBatch.statements);
+    statements.push(auditInsertStatement(
+      c.env.DB,
+      user.id,
+      'TRANSACTION_CREATE',
+      'transactions',
+      id,
+      ownership,
+      auditDetails({ inventorySyncStatus, inventorySyncError }),
+    ));
+    statements.push(...automaticMovementAuditStatements(
+      c.env.DB,
+      user.id,
+      ownership,
+      id,
+      inventoryBatch.movements,
+      'create',
+    ));
 
     await c.env.DB.batch(statements);
-
-    await logAudit(c.env.DB, user.id, 'CREATE_TRANSACTION', 'transactions', id);
 
     return c.json({
       success: true,
@@ -1328,9 +1659,14 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
     }, 201);
   } catch (err) {
     if (err instanceof ValidationError) {
-      return c.json({ success: false, error: err.message }, 400);
+      return c.json({
+        success: false,
+        error: err.message,
+        ...(err.code ? { code: err.code } : {}),
+      }, err.status as any);
     }
     if (err instanceof InventorySyncError) {
+      await logTransactionStockSyncFailed(c.env.DB, auditUser, auditTransactionId, auditOwnership, err);
       const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
       return c.json({ success: false, error: err.message, code: err.code }, status);
     }
@@ -1343,12 +1679,17 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
 // PUT /api/transactions/:id
 // ============================================================================
 transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
+  let auditUser: User | null = null;
+  let auditOwnership: ScopeValues | null = null;
+  let auditTransactionId: string | null = null;
   try {
     const user = c.get('user');
+    auditUser = user;
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const requestOwnership = scopeInsertValues(scope, user);
     const id = c.req.param('id')!;
+    auditTransactionId = id;
     const body = await c.req.json<IncomingBody>();
 
     const existing = await c.env.DB.prepare(`
@@ -1367,6 +1708,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       tenantId: existing.tenant_id || requestOwnership.tenantId,
       companyId: existing.company_id || requestOwnership.companyId,
     };
+    auditOwnership = transactionOwnership;
     const lineItemScope = ownershipClause(transactionOwnership, 'ti');
     const { results: existingLineItemRows } = await c.env.DB.prepare(`
       SELECT
@@ -1439,7 +1781,6 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       [['po_number', 'poNumber'], 'po_number'],
       [['po_file_key', 'poFileKey'], 'po_file_key'],
       [['po_file_name', 'poFileName'], 'po_file_name'],
-      [['project_id', 'projectId'], 'project_id'],
     ];
 
     for (const [keys, column] of simpleTextFields) {
@@ -1448,7 +1789,10 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     }
 
     const marketRaw = firstDefined(body, ['market_id', 'marketId']);
-    if (marketRaw !== undefined) setColumn('market_id', await validateMarket(c.env.DB, marketRaw, false, transactionOwnership));
+    const marketNameRaw = firstDefined(body, ['market_name', 'marketName', 'market']);
+    if (marketRaw !== undefined || marketNameRaw !== undefined) {
+      setColumn('market_id', await resolveMarket(c.env.DB, body, false, transactionOwnership));
+    }
 
     const sourceWarehouseRaw = firstDefined(body, ['source_warehouse_id', 'sourceWarehouseId']);
     if (sourceWarehouseRaw !== undefined) {
@@ -1464,6 +1808,9 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
 
     const contactRaw = firstDefined(body, ['contact_id', 'contactId']);
     if (contactRaw !== undefined) setColumn('contact_id', await validateContact(c.env.DB, contactRaw, transactionOwnership));
+
+    const projectRaw = firstDefined(body, ['project_id', 'projectId']);
+    if (projectRaw !== undefined) setColumn('project_id', await validateProject(c.env.DB, projectRaw, transactionOwnership));
 
     const shouldReplaceLineItems = incomingItems(body).length > 0;
     const lineItems = shouldReplaceLineItems
@@ -1510,7 +1857,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     let inventorySyncError = existing.inventory_sync_error;
     let inventorySyncVersion = existing.inventory_sync_version || 0;
     let inventorySyncedAt: string | null | undefined;
-    let inventoryBatch: { statements: D1PreparedStatement[] } = { statements: [] };
+    let inventoryBatch: PreparedInventoryMovementBatch = { statements: [], movements: [] };
 
     if (syncAffectingUpdate) {
       const targetSyncVersion = wasSynced || inventorySyncStatus !== 'synced'
@@ -1605,10 +1952,25 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       }
     }
     statements.push(...inventoryBatch.statements);
+    statements.push(auditInsertStatement(
+      c.env.DB,
+      user.id,
+      'TRANSACTION_UPDATE',
+      'transactions',
+      id,
+      transactionOwnership,
+      auditDetails({ inventorySyncStatus, inventorySyncError, syncAffectingUpdate }),
+    ));
+    statements.push(...automaticMovementAuditStatements(
+      c.env.DB,
+      user.id,
+      transactionOwnership,
+      id,
+      inventoryBatch.movements,
+      'update',
+    ));
 
     await c.env.DB.batch(statements);
-
-    await logAudit(c.env.DB, user.id, 'UPDATE_TRANSACTION', 'transactions', id);
     return c.json({
       success: true,
       inventorySyncStatus,
@@ -1616,9 +1978,14 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return c.json({ success: false, error: err.message }, 400);
+      return c.json({
+        success: false,
+        error: err.message,
+        ...(err.code ? { code: err.code } : {}),
+      }, err.status as any);
     }
     if (err instanceof InventorySyncError) {
+      await logTransactionStockSyncFailed(c.env.DB, auditUser, auditTransactionId, auditOwnership, err);
       const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
       return c.json({ success: false, error: err.message, code: err.code }, status);
     }
@@ -1631,12 +1998,17 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
 // DELETE /api/transactions/:id
 // ============================================================================
 transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIONS), async (c) => {
+  let auditUser: User | null = null;
+  let auditOwnership: ScopeValues | null = null;
+  let auditTransactionId: string | null = null;
   try {
     const user = c.get('user');
+    auditUser = user;
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const requestOwnership = scopeInsertValues(scope, user);
     const id = c.req.param('id')!;
+    auditTransactionId = id;
 
     const existing = await c.env.DB.prepare(`
       SELECT
@@ -1664,6 +2036,7 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
       tenantId: existing.tenant_id || requestOwnership.tenantId,
       companyId: existing.company_id || requestOwnership.companyId,
     };
+    auditOwnership = transactionOwnership;
     const now = new Date().toISOString();
     const nextSyncVersion = existing.inventory_sync_status === 'synced'
       ? (existing.inventory_sync_version || 0) + 1
@@ -1676,9 +2049,9 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
         idempotencyPrefix: `reversal:void:${id}:v${nextSyncVersion}`,
       })
       : [];
-    const inventoryBatch = reversalMovements.length > 0
+    const inventoryBatch: PreparedInventoryMovementBatch = reversalMovements.length > 0
       ? await prepareInventoryMovementBatch(c.env.DB, reversalMovements, transactionOwnership)
-      : { statements: [] };
+      : { statements: [], movements: [] };
 
     const statements: D1PreparedStatement[] = [
       c.env.DB.prepare(`
@@ -1693,14 +2066,31 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
         WHERE id = ? AND ${scopeWhere.clause}
       `).bind(nextSyncVersion, now, user.id, now, id, ...scopeWhere.params),
       ...inventoryBatch.statements,
+      auditInsertStatement(
+        c.env.DB,
+        user.id,
+        'TRANSACTION_VOID',
+        'transactions',
+        id,
+        transactionOwnership,
+        auditDetails({ previousInventorySyncStatus: existing.inventory_sync_status }),
+      ),
+      ...automaticMovementAuditStatements(
+        c.env.DB,
+        user.id,
+        transactionOwnership,
+        id,
+        inventoryBatch.movements,
+        'void',
+      ),
     ];
 
     await c.env.DB.batch(statements);
 
-    await logAudit(c.env.DB, user.id, 'DELETE_TRANSACTION', 'transactions', id);
     return c.json({ success: true, inventorySyncStatus: 'voided' });
   } catch (err) {
     if (err instanceof InventorySyncError) {
+      await logTransactionStockSyncFailed(c.env.DB, auditUser, auditTransactionId, auditOwnership, err);
       const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;
       return c.json({ success: false, error: err.message, code: err.code }, status);
     }
