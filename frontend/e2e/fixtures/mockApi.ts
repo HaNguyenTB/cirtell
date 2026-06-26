@@ -1,8 +1,8 @@
 import type { Page, Request, Route } from '@playwright/test';
 
-type UserRole = 'Admin' | 'User' | 'Viewer';
+export type UserRole = 'Admin' | 'User' | 'Viewer';
 
-interface MockUserOptions {
+export interface MockUserOptions {
   role?: UserRole;
   isSuperAdmin?: boolean;
 }
@@ -126,7 +126,7 @@ interface MockGhgEntry {
   created_by_name: string | null;
 }
 
-interface MockState {
+export interface MockState {
   parts: MockPart[];
   transactions: MockTransaction[];
   warehouses: MockWarehouse[];
@@ -134,6 +134,14 @@ interface MockState {
   movements: MockMovement[];
   projects: MockProject[];
   ghgEntries: MockGhgEntry[];
+  requests: {
+    authValidate: unknown[];
+    partCreates: unknown[];
+    transactionCreates: unknown[];
+    poUploads: Array<{ url: string; fileName: string | null; contentType: string | null }>;
+    inventoryMoves: unknown[];
+    ghgCreates: unknown[];
+  };
 }
 
 const tenant = {
@@ -159,6 +167,34 @@ const corsHeaders = {
   'access-control-allow-credentials': 'true',
   vary: 'Origin',
 };
+
+function mockUser(role: UserRole, isSuperAdmin: boolean) {
+  return {
+    id: role === 'Viewer' ? 'user-viewer' : role === 'User' ? 'user-standard' : 'user-admin',
+    email: role === 'Viewer'
+      ? 'viewer@techbridge.example'
+      : role === 'User'
+        ? 'user@techbridge.example'
+        : 'admin@techbridge.example',
+    name: role === 'Viewer' ? 'Viewer User' : role === 'User' ? 'Standard User' : 'Admin User',
+    role,
+    status: 'active',
+    tenant_id: tenant.id,
+    company_id: company.id,
+    tenant_name: tenant.name,
+    company_name: company.name,
+    is_super_admin: isSuperAdmin,
+  };
+}
+
+function mockTenantContext(role: UserRole) {
+  return {
+    tenant,
+    company_ids: [company.id],
+    companies: [company],
+    managed_tenants: role === 'Viewer' ? [] : [tenant],
+  };
+}
 
 export function createMockState(): MockState {
   const parts: MockPart[] = [
@@ -305,6 +341,23 @@ export function createMockState(): MockState {
     ],
     ghgEntries: [
       {
+        id: 'ghg-avoided-1',
+        source_type: 'transaction',
+        scope: 3,
+        category_id: 1,
+        scope3_stream: 'Purchased goods and services',
+        source_description: 'Avoided redeploy emissions',
+        activity_data: 10,
+        activity_unit: 'unit',
+        emission_factor: 2.5,
+        emission_factor_unit: 'kgCO2e',
+        co2e_kg: 25,
+        reporting_period_start: '2026-06-01',
+        reporting_period_end: '2026-06-30',
+        data_quality: 'estimated',
+        created_by_name: 'System',
+      },
+      {
         id: 'ghg-1',
         scope: 3,
         category_id: 1,
@@ -321,6 +374,14 @@ export function createMockState(): MockState {
         created_by_name: 'Admin User',
       },
     ],
+    requests: {
+      authValidate: [],
+      partCreates: [],
+      transactionCreates: [],
+      poUploads: [],
+      inventoryMoves: [],
+      ghgCreates: [],
+    },
   };
 }
 
@@ -330,9 +391,13 @@ export async function installMockAuth(page: Page, options: MockUserOptions = {})
   await page.addInitScript(
     ({ role: injectedRole, isSuperAdmin: injectedSuperAdmin, tenantRecord, companyRecord }) => {
       const user = {
-        id: injectedRole === 'Viewer' ? 'user-viewer' : 'user-admin',
-        email: injectedRole === 'Viewer' ? 'viewer@techbridge.example' : 'admin@techbridge.example',
-        name: injectedRole === 'Viewer' ? 'Viewer User' : 'Admin User',
+        id: injectedRole === 'Viewer' ? 'user-viewer' : injectedRole === 'User' ? 'user-standard' : 'user-admin',
+        email: injectedRole === 'Viewer'
+          ? 'viewer@techbridge.example'
+          : injectedRole === 'User'
+            ? 'user@techbridge.example'
+            : 'admin@techbridge.example',
+        name: injectedRole === 'Viewer' ? 'Viewer User' : injectedRole === 'User' ? 'Standard User' : 'Admin User',
         role: injectedRole,
         status: 'active',
         tenant_id: tenantRecord.id,
@@ -367,7 +432,9 @@ export async function installMockAuth(page: Page, options: MockUserOptions = {})
   );
 }
 
-export async function installMockApi(page: Page, state = createMockState()) {
+export async function installMockApi(page: Page, state = createMockState(), options: MockUserOptions = {}) {
+  const role = options.role ?? 'Admin';
+  const isSuperAdmin = options.isSuperAdmin ?? role === 'Admin';
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (!url.pathname.startsWith('/api/')) {
@@ -375,12 +442,12 @@ export async function installMockApi(page: Page, state = createMockState()) {
       return;
     }
 
-    await handleApiRoute(route, state, url);
+    await handleApiRoute(route, state, url, { role, isSuperAdmin });
   });
   return state;
 }
 
-async function handleApiRoute(route: Route, state: MockState, url: URL) {
+async function handleApiRoute(route: Route, state: MockState, url: URL, actor: Required<MockUserOptions>) {
   const request = route.request();
   const method = request.method();
   const path = url.pathname;
@@ -390,25 +457,21 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
     return;
   }
 
+  if (path === '/api/auth/validate' && method === 'POST') {
+    state.requests.authValidate.push({ token: request.headers().authorization || null });
+    await respond(route, {
+      success: true,
+      user: mockUser(actor.role, actor.isSuperAdmin),
+      tenantContext: mockTenantContext(actor.role),
+    });
+    return;
+  }
+
   if (path === '/api/auth/me') {
     await respond(route, {
       success: true,
-      user: {
-        id: 'user-admin',
-        email: 'admin@techbridge.example',
-        name: 'Admin User',
-        role: 'Admin',
-        status: 'active',
-        tenant_id: tenant.id,
-        company_id: company.id,
-        is_super_admin: true,
-      },
-      tenantContext: {
-        tenant,
-        company_ids: [company.id],
-        companies: [company],
-        managed_tenants: [tenant],
-      },
+      user: mockUser(actor.role, actor.isSuperAdmin),
+      tenantContext: mockTenantContext(actor.role),
     });
     return;
   }
@@ -425,7 +488,11 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
         total_units: totalUnits,
         reuse_rate: 42,
         total_co2e_kg: totalCo2e,
+        actual_co2e_kg: totalCo2e,
         avoided_co2e_kg: avoidedGhgTotal(state.ghgEntries),
+        net_co2e_kg: totalCo2e - avoidedGhgTotal(state.ghgEntries),
+        avoided_redeploy_co2e_kg: avoidedGhgTotal(state.ghgEntries),
+        avoided_recycle_co2e_kg: 0,
         scope1_kg: scopeTotal(state.ghgEntries, 1),
         scope2_kg: scopeTotal(state.ghgEntries, 2),
         scope3_kg: scopeTotal(state.ghgEntries, 3),
@@ -466,6 +533,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
 
   if (path === '/api/parts' && method === 'POST') {
     const body = await readJson(request);
+    state.requests.partCreates.push(body);
     const newPart: MockPart = {
       id: `part-${state.parts.length + 1}`,
       part_number: String(body.part_number || 'NEW-PART'),
@@ -525,8 +593,12 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
 
   if (path === '/api/transactions' && method === 'POST') {
     const body = await readJson(request);
-    const part = state.parts.find((candidate) => candidate.id === body.part_id);
-    const warehouse = state.warehouses.find((candidate) => candidate.id === body.destination_warehouse_id);
+    state.requests.transactionCreates.push(body);
+    const firstItem = Array.isArray(body.items) ? body.items[0] : null;
+    const partId = body.part_id || firstItem?.part_id;
+    const destinationWarehouseId = body.destination_warehouse_id || firstItem?.destination_warehouse_id;
+    const part = state.parts.find((candidate) => candidate.id === partId);
+    const warehouse = state.warehouses.find((candidate) => candidate.id === destinationWarehouseId);
     const project = state.projects.find((candidate) => candidate.id === body.project_id);
     const market = body.market_id === 'market-qa'
       ? { marketName: 'Qatar', region: 'Middle East' }
@@ -563,7 +635,25 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
     return;
   }
 
-  if (/^\/api\/transactions\/[^/]+\/po-(upload|download)$/.test(path)) {
+  if (/^\/api\/transactions\/[^/]+\/po-upload$/.test(path) && method === 'POST') {
+    const formData = await request.postDataBuffer();
+    const raw = formData.toString('latin1');
+    const fileName = /filename="([^"]+)"/.exec(raw)?.[1] || null;
+    const contentType = /Content-Type: ([^\r\n]+)/.exec(raw)?.[1] || null;
+    state.requests.poUploads.push({ url: path, fileName, contentType });
+    await respond(route, {
+      success: true,
+      data: {
+        transactionId: path.split('/')[3],
+        fileName: fileName || 'mock-po.pdf',
+        contentType: contentType || 'application/pdf',
+        sizeBytes: formData.byteLength,
+      },
+    });
+    return;
+  }
+
+  if (/^\/api\/transactions\/[^/]+\/po-download$/.test(path)) {
     await respond(route, { success: true, file_name: 'mock-po.pdf' });
     return;
   }
@@ -595,6 +685,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
 
   if (path === '/api/warehouses/inventory/move' && method === 'POST') {
     const body = await readJson(request);
+    state.requests.inventoryMoves.push(body);
     const part = state.parts.find((candidate) => candidate.id === body.part_id);
     const toWarehouse = state.warehouses.find((candidate) => candidate.id === body.to_warehouse_id);
     const fromWarehouse = state.warehouses.find((candidate) => candidate.id === body.from_warehouse_id);
@@ -657,7 +748,8 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
   }
 
   if (path === '/api/ghg/report') {
-    await respond(route, { success: true, totals: buildGhgReport(state.ghgEntries) });
+    const report = buildGhgReport(state.ghgEntries);
+    await respond(route, { success: true, ...report });
     return;
   }
 
@@ -670,6 +762,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
 
   if (path === '/api/ghg/entries' && method === 'POST') {
     const body = await readJson(request);
+    state.requests.ghgCreates.push(body);
     const entry: MockGhgEntry = {
       id: `ghg-${state.ghgEntries.length + 1}`,
       scope: Number(body.scope || 3),
@@ -762,7 +855,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL) {
 }
 
 async function respond(route: Route, payload: unknown, status = 200) {
-  const origin = route.request().headers().origin || 'http://127.0.0.1:5174';
+  const origin = route.request().headers().origin || 'http://127.0.0.1:4173';
   await route.fulfill({
     status,
     contentType: 'application/json',
@@ -818,14 +911,34 @@ function buildGhgReport(entries: MockGhgEntry[]) {
   const scope2 = scopeTotal(entries, 2);
   const scope3 = scopeTotal(entries, 3);
   const avoided = avoidedGhgTotal(entries);
+  const actual = scope1 + scope2 + scope3;
   return {
-    total_kg: scope1 + scope2 + scope3,
+    total_kg: actual,
     scope1_kg: scope1,
     scope2_kg: scope2,
     scope3_kg: scope3,
     avoided_co2e_kg: avoided,
     avoided_redeploy_kg: avoided,
     avoided_recycle_kg: 0,
+    actual: {
+      total_co2e_kg: actual,
+      scope1_kg: scope1,
+      scope2_kg: scope2,
+      scope3_kg: scope3,
+      entry_count: entries.filter((entry) => entry.source_type !== 'transaction').length,
+      breakdown: [],
+    },
+    avoided: {
+      total_co2e_kg: avoided,
+      entry_count: entries.filter((entry) => entry.source_type === 'transaction').length,
+      by_movement_type: [
+        { movement_type: 'Redeploy', co2e_kg: avoided, entry_count: avoided > 0 ? 1 : 0 },
+      ],
+      by_part: [],
+    },
+    net: {
+      actual_minus_avoided_co2e_kg: actual - avoided,
+    },
   };
 }
 
