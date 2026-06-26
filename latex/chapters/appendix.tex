@@ -1,0 +1,32 @@
+\chapter{Phụ lục}
+
+\section{Phụ lục A: Danh sách bảng dữ liệu cốt lõi}
+\begin{longtable}{p{4.5cm}p{9.5cm}}
+\toprule
+\textbf{Bảng} & \textbf{Mục đích} \\
+\midrule
+\texttt{tenants} & Quản lý không gian dữ liệu theo tổ chức \\
+\texttt{parts} & Danh mục phụ tùng viễn thông \\
+\texttt{projects} & Quản lý dự án vòng đời thiết bị \\
+\texttt{project\_equipment} & Quản lý thiết bị trong từng dự án \\
+\texttt{warehouses} & Quản lý kho bãi đa điểm \\
+\texttt{warehouse\_stock} & Theo dõi tồn kho theo trạng thái \\
+\texttt{audit\_logs} & Lưu vết thao tác quan trọng \\
+\bottomrule
+\end{longtable}
+
+\section{Phụ lục B: Kịch bản kiểm thử tích hợp giai đoạn 1}
+\begin{enumerate}[leftmargin=1.2cm]
+    \item Tạo phụ tùng mới trong Parts Catalog.
+    \item Tạo dự án ở trạng thái Draft.
+    \item Thêm thiết bị từ catalog vào dự án, ghi nhận condition/disposition.
+    \item Điều chuyển thiết bị vào kho đích ở trạng thái in stock.
+    \item Kiểm tra KPI tổng số thiết bị và giá trị tồn kho trên dashboard.
+\end{enumerate}
+
+\section{Phụ lục C: Quy ước đánh số hình và bảng}
+Trong báo cáo này, số hiệu hình và bảng được đánh theo chương:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Hình: Chương.Số thứ tự (ví dụ: Hình 2.1, Hình 2.2).
+    \item Bảng: Chương.Số thứ tự (ví dụ: Bảng 3.1, Bảng 3.2).
+\end{itemize}

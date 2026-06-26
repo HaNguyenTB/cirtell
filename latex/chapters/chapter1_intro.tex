@@ -1,0 +1,151 @@
+\chapter{Tổng quan đề tài}
+\label{ch:tongquan}
+
+\section{Bối cảnh và lý do chọn đề tài}
+\label{sec:boicanh}
+
+\subsection{Bối cảnh thực tiễn}
+Ngành viễn thông toàn cầu đang vận hành một khối lượng tài sản hạ tầng rất lớn, bao gồm các thiết bị mạng truy nhập vô tuyến (RAN) như BTS, NodeB, eNodeB, gNB cùng các module BBU, RRU, antenna và các thiết bị mạng lõi như router, switch, firewall. Theo báo cáo \emph{The Global E-waste Monitor 2020} của Liên Hợp Quốc và Liên minh Viễn thông Quốc tế, khối lượng rác thải điện tử toàn cầu đã đạt 53,6 triệu tấn vào năm 2019, trong đó nhóm thiết bị CNTT và viễn thông chiếm tỷ trọng đáng kể, song tỷ lệ tái chế chính thức mới chỉ đạt khoảng 17,4\% \cite{itu2022ewaste}. Phần lớn giá trị vật liệu, đặc biệt là kim loại quý và đất hiếm trong bo mạch viễn thông, vẫn chưa được thu hồi một cách có hệ thống.
+
+Tại Việt Nam, các nhà mạng và doanh nghiệp viễn thông đang thực hiện chu trình hiện đại hóa mạng lưới gắn với việc tắt sóng 2G và 3G, mở rộng 4G và triển khai 5G. Quá trình này tạo ra một lượng lớn thiết bị 2G/3G còn giá trị sử dụng được tháo dỡ ra khỏi mạng. Trong khi đó, năng lực quản lý các tài sản này -- bao gồm theo dõi vị trí, tình trạng, giá trị còn lại và phương án xử lý -- vẫn chủ yếu dựa trên các bảng tính rời rạc, hồ sơ giấy hoặc hệ thống ERP nội bộ chưa được tinh chỉnh cho đặc thù vòng đời thiết bị viễn thông. Hệ quả là một phần đáng kể tài sản bị xuống cấp trong kho, không được tái sử dụng hoặc tái chế đúng cách, làm gia tăng chi phí vận hành và phát thải CO$_2$ ngầm \cite{ghgprotocol2011}.
+
+Mô hình kinh tế tuần hoàn (Circular Economy) được Liên minh châu Âu và Tổ chức Ellen MacArthur \cite{ellenmacarthur2013} đề xuất như một định hướng phát triển bền vững cho ngành công nghiệp, dựa trên các nguyên tắc tối thiểu hóa khai thác tài nguyên mới, kéo dài vòng đời tài sản và tái sử dụng vật liệu thay vì thải bỏ. Trong ngành viễn thông, kinh tế tuần hoàn được thể hiện qua các hoạt động \emph{refurbishment} (phục hồi thiết bị), \emph{remarketing} (tái phân phối ra thị trường thứ cấp), \emph{spare-part harvesting} (thu hồi linh kiện) và \emph{material recycling} (tái chế vật liệu) \cite{geissdoerfer2017}. Để các hoạt động này có hiệu quả và đo lường được, hạ tầng số đóng vai trò mấu chốt: cần một hệ thống theo dõi từng đơn vị thiết bị theo serial/IMEI, ghi nhận tình trạng kỹ thuật, định giá suy hao và đề xuất phương án xử lý hợp lý.
+
+Xuất phát từ thực tiễn nêu trên và quá trình tham gia khảo sát trực tiếp các dự án xử lý hạ tầng viễn thông, đề tài \textit{``Xây dựng hệ thống quản lý vòng đời và tồn kho thiết bị viễn thông''} được chọn lựa để vừa giải quyết nhu cầu nghiệp vụ cụ thể, vừa cung cấp một mô hình tham khảo cho việc số hóa quản trị tài sản viễn thông theo định hướng phát triển bền vững.
+
+\subsection{Hiện trạng quản lý và những thách thức}
+Khảo sát sơ bộ tại một số doanh nghiệp viễn thông và đơn vị xử lý hạ tầng cho thấy quy trình quản lý tài sản hiện hành còn nhiều bất cập:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Phân mảnh dữ liệu:} thông tin về thiết bị được lưu trữ rải rác trên các bảng tính Excel, hệ thống kế toán, và hồ sơ giấy của từng dự án, dẫn đến khó tổng hợp dữ liệu xuyên suốt giữa các kho và dự án.
+    \item \textbf{Thiếu định danh tới mức đơn vị:} phần lớn các đơn vị quản lý theo \emph{lô} hoặc \emph{số lượng tổng}; trong khi định danh đơn vị (Serial, IMEI, asset tag) là tiền đề cốt lõi để định giá suy hao chính xác và truy xuất nguồn gốc.
+    \item \textbf{Quy trình thủ công:} đánh giá tình trạng, phân loại, định giá và quyết định phương án xử lý chủ yếu dựa trên kinh nghiệm cá nhân, thiếu hệ thống hỗ trợ ghi nhận có cấu trúc.
+    \item \textbf{Khó báo cáo bền vững:} không có dữ liệu nền để tính toán các chỉ số bền vững như tỷ lệ tái sử dụng, khối lượng tái chế hay CO$_2$ tránh phát thải.
+    \item \textbf{Khó kiểm soát rủi ro tuân thủ:} các quy định về xử lý chất thải nguy hại điện tử yêu cầu lưu vết đầy đủ; việc thiếu hệ thống ghi nhật ký gây khó khăn khi thanh tra hoặc đối chiếu ESG.
+\end{itemize}
+
+\subsection{Lý do chọn đề tài}
+Trên nền các vấn đề thực tiễn ở trên, đề tài hướng tới việc \textbf{thiết kế và hiện thực hóa một nền tảng web tinh gọn} cho phép một tổ chức quy mô vừa quản lý tập trung danh mục phụ tùng, dự án xử lý, tồn kho đa kho và các chỉ số bền vững liên quan. Đề tài có ba luận điểm chính:
+
+\begin{enumerate}[leftmargin=1.2cm]
+    \item \textbf{Tính thời sự:} bám sát quá trình hiện đại hóa hạ tầng viễn thông và yêu cầu về phát triển bền vững đang gia tăng tại Việt Nam.
+    \item \textbf{Tính học thuật:} cho phép vận dụng đồng thời các kiến thức về phân tích thiết kế hệ thống thông tin, mô hình hóa dữ liệu quan hệ, kiến trúc serverless, an ninh ứng dụng web và trực quan hóa dữ liệu.
+    \item \textbf{Tính kế thừa:} đề tài là phiên bản thu gọn cho mục đích học thuật của hệ thống Cirveris đang vận hành thực tế; phiên bản học thuật được đặt tên \texttt{Cirtell}, trong đó các nghiệp vụ đa quốc gia, đa tenant phức tạp được giản lược, giữ lại phần kiến trúc và mô hình dữ liệu cốt lõi.
+\end{enumerate}
+
+\section{Mục tiêu của đồ án}
+\label{sec:muctieu}
+
+\subsection{Mục tiêu tổng quát}
+Xây dựng hệ thống thông tin web hỗ trợ quản lý vòng đời thiết bị viễn thông, từ giai đoạn nhập kho, đánh giá tình trạng, phân loại, sử dụng, điều chuyển đến tái sử dụng hoặc tái chế; đồng thời cung cấp dashboard phân tích đa chiều về tồn kho, giá trị tài sản và chỉ số bền vững phục vụ ra quyết định.
+
+\subsection{Mục tiêu cụ thể}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{M1 -- Quản lý danh mục phụ tùng (Parts Catalog):} CRUD phụ tùng theo \texttt{vendor} (Ericsson, Nokia, Huawei\dots), \texttt{technology} (2G--5G, Microwave, Fibre), \texttt{equipment\_type} (Antenna, RRU, BBU\dots); hỗ trợ tìm kiếm \emph{space-insensitive} thông qua biểu thức \texttt{REPLACE(column,' ','') LIKE ?}.
+    \item \textbf{M2 -- Quản lý dự án vòng đời (Project Lifecycle):} quản lý workflow trạng thái \texttt{Draft $\rightarrow$ Assessment $\rightarrow$ In Progress $\rightarrow$ Completed} với ràng buộc chuyển trạng thái và lưu vết người thao tác.
+    \item \textbf{M3 -- Quản lý thiết bị trong dự án (Project Equipment):} ghi nhận \texttt{condition}, \texttt{disposition}, \texttt{weight\_exact\_kg}, \texttt{estimated\_value}, \texttt{actual\_value}; liên thông với Parts Catalog để chuẩn hóa thuộc tính kỹ thuật.
+    \item \textbf{M4 -- Quản lý tồn kho và kho bãi (Inventory \& Warehouse):} theo dõi đa kho theo trạng thái \texttt{In Stock / Allocated / Shipped}; hỗ trợ nghiệp vụ nhập kho, xuất kho, chuyển kho và phân tích sức chứa.
+    \item \textbf{M5 -- Dashboard \& Báo cáo:} tổng hợp KPI tổng số thiết bị, tổng giá trị tồn kho, tỷ lệ tái sử dụng, CO$_2$ tránh phát thải; biểu đồ phân bố theo \texttt{vendor / technology / status / disposition}.
+\end{itemize}
+
+\subsection{Mục tiêu phi chức năng}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Hiệu năng:} thời gian phản hồi API tác nghiệp ở mức dưới 500\,ms với tập dữ liệu vài chục nghìn bản ghi.
+    \item \textbf{Bảo mật:} xác thực JWT theo chuẩn RFC 7519 \cite{rfc7519}, phân quyền RBAC theo mô hình của Sandhu \cite{sandhu1996rbac}, mọi truy vấn được tham số hóa để chống SQL injection.
+    \item \textbf{Khả năng mở rộng:} kiến trúc tách lớp rõ ràng, hỗ trợ thêm module mới mà không phá vỡ thiết kế.
+    \item \textbf{Khả dụng:} giao diện responsive cho desktop và tablet, tương thích với các trình duyệt hiện đại.
+    \item \textbf{Khả năng kiểm toán:} ghi audit log đầy đủ các hành động CRUD và chuyển trạng thái.
+\end{itemize}
+
+\section{Phạm vi của đồ án}
+\label{sec:phamvi}
+
+\subsection{Các chức năng trong phạm vi}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Đăng nhập, đăng xuất, khôi phục phiên làm việc thông qua Azure AD (MSAL) \cite{msalDoc} và JWT \cite{rfc7519}.
+    \item CRUD danh mục phụ tùng, kho bãi, dự án và thiết bị dự án.
+    \item Quản lý workflow trạng thái dự án và workflow tồn kho theo từng đơn vị thiết bị.
+    \item Báo cáo tồn kho theo kho, theo trạng thái, theo \texttt{vendor} và \texttt{technology}.
+    \item Dashboard tổng quan với các KPI cốt lõi và biểu đồ phân bố.
+    \item Audit logging các hành động quan trọng (CRUD, status change, login).
+\end{itemize}
+
+\subsection{Các chức năng ngoài phạm vi}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Tích hợp ERP, hệ thống kế toán hoặc EAM của doanh nghiệp.
+    \item Tự động đề xuất phương án xử lý dựa trên trí tuệ nhân tạo / học máy.
+    \item Quản lý chi tiết quy trình logistics và vận tải thiết bị giữa các kho.
+    \item Quản lý thanh toán và đối soát công nợ với khách hàng / nhà cung cấp.
+    \item Hỗ trợ ứng dụng di động native cho Android / iOS.
+    \item Đa ngôn ngữ giao diện -- giai đoạn đầu chỉ hỗ trợ tiếng Anh.
+\end{itemize}
+
+\section{Khảo sát các giải pháp hiện có}
+\label{sec:khaosat}
+
+\subsection{Mục đích khảo sát}
+Khảo sát nhằm xác định các phương pháp và công cụ đang được sử dụng để quản lý tài sản viễn thông tại các doanh nghiệp trong và ngoài nước; trên cơ sở đó định vị giải pháp đề xuất, làm rõ điểm khác biệt và những nội dung mà đồ án cần bổ sung.
+
+\subsection{Các giải pháp được khảo sát}
+
+\paragraph{a) Quản lý thủ công bằng bảng tính.}\mbox{}\\
+Một bộ phận lớn các đơn vị xử lý hạ tầng viễn thông quy mô vừa và nhỏ vẫn dùng Excel/Google Sheets làm công cụ chính.
+\begin{itemize}[leftmargin=1.2cm, nosep, label=\textbullet]
+    \item \textbf{Ưu điểm:} chi phí thấp, dễ tùy biến, không phụ thuộc nhà cung cấp.
+    \item \textbf{Nhược điểm:} dữ liệu phân mảnh, khó truy vết, không thể quản lý đồng thời nhiều người, không có cơ chế phân quyền chặt chẽ và không hỗ trợ dashboard động.
+\end{itemize}
+
+\paragraph{b) Hệ thống ERP đa năng (SAP, Oracle, Odoo).}\mbox{}\\
+Các nền tảng ERP lớn cung cấp module quản lý tài sản, kho và dự án.
+\begin{itemize}[leftmargin=1.2cm, nosep, label=\textbullet]
+    \item \textbf{Ưu điểm:} bao phủ rộng, tích hợp tốt với kế toán.
+    \item \textbf{Nhược điểm:} chi phí triển khai cao, mô hình dữ liệu chuẩn không tối ưu cho thuộc tính riêng của thiết bị viễn thông (vendor, technology, IMEI, refurbishment grade); việc tùy biến đòi hỏi đội ngũ chuyên gia và thời gian dài.
+\end{itemize}
+
+\paragraph{c) Hệ thống EAM chuyên biệt (IBM Maximo, Infor EAM).}\mbox{}\\
+Các nền tảng \emph{Enterprise Asset Management} có khả năng quản lý vòng đời tài sản chi tiết.
+\begin{itemize}[leftmargin=1.2cm, nosep, label=\textbullet]
+    \item \textbf{Ưu điểm:} mạnh về bảo trì, ghi nhận điều kiện thiết bị.
+    \item \textbf{Nhược điểm:} thiên về thiết bị sản xuất, ít tối ưu cho mô hình \emph{reverse-logistics} của tháo dỡ thiết bị viễn thông; chi phí license cao và yêu cầu hạ tầng nội bộ.
+\end{itemize}
+
+\paragraph{d) Nền tảng SaaS thị trường thiết bị tái chế (TXO, NetMore, World Telecom Labs).}\mbox{}\\
+Các nền tảng quốc tế tập trung vào mua bán thiết bị viễn thông đã qua sử dụng.
+\begin{itemize}[leftmargin=1.2cm, nosep, label=\textbullet]
+    \item \textbf{Ưu điểm:} có sẵn catalog thiết bị, kết nối thị trường thứ cấp.
+    \item \textbf{Nhược điểm:} không cung cấp môi trường tùy biến cho doanh nghiệp tự quản trị toàn bộ vòng đời nội bộ; các quy trình xử lý nội bộ vẫn phải dựa vào công cụ ngoài hệ thống.
+\end{itemize}
+
+\subsection{Định vị giải pháp đề xuất}
+Trên cơ sở khảo sát, đồ án định vị Cirtell ở vùng \emph{trung gian} giữa bảng tính thủ công và các nền tảng ERP/EAM lớn:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Tinh gọn về phạm vi nghiệp vụ, tập trung vào quản lý thiết bị viễn thông và tồn kho đa kho.
+    \item Hiện đại về kiến trúc, sử dụng serverless và D1 trên Cloudflare để giảm chi phí vận hành.
+    \item Có khả năng mở rộng về sau khi cần tích hợp thêm các module ERP/EAM.
+    \item Mở về mã nguồn ở mức học thuật để có thể minh họa các quyết định thiết kế.
+\end{itemize}
+
+\section{Phương pháp nghiên cứu}
+\label{sec:phuongphap}
+\begin{description}
+    \item[Nghiên cứu lý thuyết:] tổng hợp tài liệu về kinh tế tuần hoàn \cite{ellenmacarthur2013, geissdoerfer2017}, quản lý chuỗi cung ứng và tồn kho \cite{chopra2019scm, apics2018}, kiến trúc REST \cite{fielding2000}, RBAC \cite{sandhu1996rbac} và các tài liệu kỹ thuật chính thức của các nền tảng được sử dụng \cite{cloudflareWorkers, cloudflareD1, honoFramework, reactDoc, tailwindDoc}.
+    \item[Phân tích và thiết kế hệ thống:] áp dụng phương pháp luận hướng đối tượng -- phân tích bằng UML (Use Case, Activity, Sequence, Class) và mô hình hóa dữ liệu bằng ERD; xây dựng kiến trúc 3 lớp tách biệt frontend, backend và lớp dữ liệu.
+    \item[Lập trình thực nghiệm:] hiện thực các module theo tiến độ tuần, kiểm thử chức năng theo kịch bản end-to-end và đánh giá kết quả dựa trên các yêu cầu chức năng đã đặc tả.
+\end{description}
+
+\section{Đóng góp chính của đồ án}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Đề xuất mô hình quản lý vòng đời thiết bị viễn thông gắn với khung kinh tế tuần hoàn 3R.
+    \item Thiết kế mô hình dữ liệu quan hệ thống nhất giữa danh mục phụ tùng, dự án và tồn kho đa kho.
+    \item Triển khai nền tảng web serverless trên Cloudflare có khả năng vận hành thực tế.
+    \item Xây dựng bộ KPI vận hành và KPI bền vững phục vụ quản trị tài sản.
+    \item Cung cấp tài liệu phân tích thiết kế chi tiết, có thể tái sử dụng cho các đề tài học thuật mở rộng.
+\end{itemize}
+
+\section{Cấu trúc báo cáo}
+Báo cáo được trình bày trong phạm vi tiến độ đến tuần 7, gồm ba chương chính:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Chương 1 -- Tổng quan đề tài:} bối cảnh, mục tiêu, phạm vi, khảo sát giải pháp, phương pháp nghiên cứu.
+    \item \textbf{Chương 2 -- Cơ sở lý thuyết và quy trình nghiệp vụ:} kinh tế tuần hoàn trong viễn thông, quản lý vòng đời thiết bị, mô hình tồn kho đa kho, kiến trúc serverless, RBAC, JWT và quy trình nghiệp vụ tham chiếu.
+    \item \textbf{Chương 3 -- Phân tích và thiết kế hệ thống:} actors, use case, đặc tả nghiệp vụ, yêu cầu chức năng/phi chức năng, kiến trúc 3 lớp, ERD chi tiết, thiết kế module và tiến độ thực hiện đến tuần 7.
+\end{itemize}

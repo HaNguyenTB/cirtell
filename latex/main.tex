@@ -1,0 +1,34 @@
+\documentclass[12pt,a4paper]{report}
+\input{preamble}
+
+\begin{document}
+
+\input{frontmatter/cover}
+
+\pagenumbering{roman}
+\input{frontmatter/acknowledgements}
+\clearpage
+\input{frontmatter/declaration}
+\clearpage
+\input{frontmatter/instructor-comments}
+\clearpage
+\tableofcontents
+\listoffigures
+\listoftables
+\clearpage
+
+\pagenumbering{arabic}
+\input{chapters/chapter1_intro}
+\input{chapters/chapter2_theory}
+\input{chapters/chapter3_analysis_design_week7}
+
+\clearpage
+\addcontentsline{toc}{chapter}{Danh mục tài liệu tham khảo}
+\printbibliography[title={Danh mục tài liệu tham khảo}]
+
+\clearpage
+\appendix
+\addcontentsline{toc}{chapter}{Phụ lục}
+\input{chapters/appendix}
+
+\end{document}

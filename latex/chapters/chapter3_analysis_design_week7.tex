@@ -1,0 +1,721 @@
+\chapter{Phân tích và thiết kế hệ thống}
+\label{ch:phantich}
+
+\section{Đặc tả yêu cầu}
+\label{sec:requirements}
+
+\subsection{Yêu cầu chức năng}
+Hệ thống Cirtell được phân tích thành năm nhóm yêu cầu chức năng (Functional Requirement -- FR), bám sát các module mục tiêu đã đặt ra ở Chương 1.
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{FR1 -- Quản lý xác thực và phiên làm việc:} đăng nhập qua Azure AD, cấp JWT nội bộ, đăng xuất, làm mới phiên, ghi audit log.
+    \item \textbf{FR2 -- Quản lý danh mục phụ tùng:} CRUD \texttt{parts}, lọc theo \texttt{vendor / technology / equipment\_type}, tìm kiếm space-insensitive theo \texttt{part\_number}.
+    \item \textbf{FR3 -- Quản lý dự án vòng đời:} CRUD \texttt{projects}, chuyển trạng thái workflow, gán người phụ trách, đính kèm bằng chứng.
+    \item \textbf{FR4 -- Quản lý thiết bị dự án:} thêm thiết bị từ catalog hoặc nhập mới, ghi nhận \texttt{condition / disposition / weight / value}, inline edit.
+    \item \textbf{FR5 -- Quản lý kho và tồn kho:} CRUD \texttt{warehouses}, nhập / xuất / chuyển kho, theo dõi \texttt{warehouse\_stock}, ghi nhận \texttt{movements}.
+    \item \textbf{FR6 -- Dashboard và báo cáo:} KPI tổng hợp, biểu đồ phân bố, xuất báo cáo.
+    \item \textbf{FR7 -- Quản trị hệ thống:} quản lý người dùng, vai trò, audit log.
+\end{itemize}
+
+\subsection{Yêu cầu phi chức năng}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{NFR1 -- Hiệu năng:} thời gian phản hồi API tác nghiệp $\leq$ 500\,ms ở tải bình thường; trang dashboard tải đầy đủ trong $\leq$ 2\,s.
+    \item \textbf{NFR2 -- Bảo mật:} JWT theo RFC 7519 \cite{rfc7519}; RBAC đa cấp; mọi truy vấn được tham số hóa; HTTPS bắt buộc.
+    \item \textbf{NFR3 -- Khả năng kiểm toán:} mọi hành động CRUD, chuyển trạng thái, đăng nhập đều được ghi audit log với \texttt{user\_id, timestamp, ip, payload}.
+    \item \textbf{NFR4 -- Khả dụng:} giao diện responsive cho desktop và tablet; tương thích Chrome/Edge/Firefox phiên bản mới.
+    \item \textbf{NFR5 -- Khả năng mở rộng:} kiến trúc tách lớp; thêm module mới không ảnh hưởng module hiện tại.
+    \item \textbf{NFR6 -- Khả năng vận hành:} triển khai bằng CI/CD; rollback bằng versioning của Cloudflare Pages/Workers.
+\end{itemize}
+
+\section{Xác định tác nhân (Actors)}
+\label{sec:actors}
+
+\subsubsection*{Tenant Admin}
+Là người quản trị cao nhất trong phạm vi một tenant (đơn vị doanh nghiệp). Chịu trách nhiệm quản lý người dùng, vai trò, danh mục cấu hình hệ thống cho tenant. Tham gia hầu hết các use case ở mức quản trị, có quyền xem toàn bộ dữ liệu trong tenant. Không can thiệp vào tenant khác.
+
+\subsubsection*{Project Manager}
+Là người phụ trách trực tiếp các dự án xử lý thiết bị viễn thông. Tham gia các use case: tạo dự án, chuyển trạng thái workflow, phân công người thực hiện, theo dõi tiến độ, phê duyệt thiết bị đánh giá. Là cầu nối giữa kỹ thuật viên hiện trường và lãnh đạo doanh nghiệp.
+
+\subsubsection*{Warehouse Operator}
+Là cán bộ kho, thực hiện các nghiệp vụ nhập kho, xuất kho, chuyển kho và kiểm kê. Có quyền chỉnh sửa trạng thái tồn kho theo từng đơn vị thiết bị. Là tác nhân ghi nhận nhiều dữ liệu vận hành nhất trong hệ thống.
+
+\subsubsection*{Field Technician}
+Là kỹ thuật viên hiện trường, thực hiện đánh giá tình trạng thiết bị tháo dỡ. Cập nhật \texttt{condition}, \texttt{disposition}, \texttt{weight\_exact\_kg} và đính kèm bằng chứng (ảnh, biên bản). Tác động trực tiếp đến chất lượng dữ liệu vòng đời.
+
+\subsubsection*{Catalog Manager}
+Là người quản trị danh mục phụ tùng, vendor, technology, equipment\_type. Đảm bảo dữ liệu tham chiếu nhất quán cho toàn bộ hoạt động đánh giá và tồn kho.
+
+\subsubsection*{Viewer}
+Là người dùng chỉ đọc, thường là lãnh đạo doanh nghiệp hoặc kiểm toán viên. Truy cập dashboard và báo cáo, không có quyền chỉnh sửa dữ liệu.
+
+\subsubsection*{System Administrator}
+Là tác nhân kỹ thuật cấp hệ thống, quản trị multi-tenant: tạo tenant mới, cấu hình môi trường, giám sát audit log toàn cục, cấu hình tích hợp.
+
+\section{Biểu đồ trường hợp sử dụng (Use Case Diagram)}
+\label{sec:usecase}
+Biểu đồ use case của hệ thống Cirtell được tổ chức quanh năm phân hệ chức năng và bảy tác nhân nêu trên. Các use case chính bao gồm:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item Đăng nhập, đăng xuất, đổi mật khẩu, quản lý phiên.
+    \item Quản lý người dùng và phân quyền.
+    \item Quản lý danh mục phụ tùng (CRUD, tìm kiếm, lọc).
+    \item Quản lý dự án vòng đời (CRUD, chuyển trạng thái workflow).
+    \item Quản lý thiết bị dự án (thêm từ catalog, đánh giá, định giá).
+    \item Quản lý kho (CRUD).
+    \item Nhập kho, xuất kho, chuyển kho.
+    \item Xem dashboard, xuất báo cáo.
+    \item Xem audit log.
+\end{itemize}
+
+Biểu đồ tổng quan các use case nghiệp vụ chính của hệ thống được trình bày ở Hình~\ref{fig:usecase}.
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  actor/.style={draw, thick, rectangle, rounded corners=2pt, minimum width=2.4cm, minimum height=0.7cm, align=center, font=\small, fill=blue!5},
+  uc/.style={draw, thick, ellipse, minimum width=3.4cm, minimum height=0.85cm, align=center, font=\small, fill=green!5},
+  sys/.style={draw, thick, dashed, rounded corners=6pt, inner sep=12pt, fill=gray!3},
+  link/.style={-, thick, gray!70}
+]
+  % Use cases
+  \node[uc] (login) {Đăng nhập / Đăng xuất};
+  \node[uc, below=0.35cm of login] (user) {Quản lý người dùng \& vai trò};
+  \node[uc, below=0.35cm of user] (catalog) {Quản lý danh mục phụ tùng};
+  \node[uc, below=0.35cm of catalog] (project) {Quản lý dự án \& workflow};
+  \node[uc, below=0.35cm of project] (equip) {Đánh giá thiết bị dự án};
+  \node[uc, below=0.35cm of equip] (wh) {Quản lý kho};
+  \node[uc, below=0.35cm of wh] (move) {Nhập / Xuất / Chuyển kho};
+  \node[uc, below=0.35cm of move] (dash) {Dashboard \& báo cáo};
+  \node[uc, below=0.35cm of dash] (audit) {Xem audit log};
+
+  % System boundary
+  \begin{scope}[on background layer]
+    \node[sys, fit=(login)(user)(catalog)(project)(equip)(wh)(move)(dash)(audit), label=above:{\textbf{Hệ thống Cirtell}}] (sysbox) {};
+  \end{scope}
+
+  % Actors left
+  \node[actor, left=2.2cm of catalog] (tadmin) {Tenant\\Admin};
+  \node[actor, above=0.45cm of tadmin] (sysadmin) {System\\Administrator};
+  \node[actor, below=0.45cm of tadmin] (catmgr) {Catalog\\Manager};
+  \node[actor, below=0.45cm of catmgr] (pm) {Project\\Manager};
+
+  % Actors right
+  \node[actor, right=2.2cm of equip] (tech) {Field\\Technician};
+  \node[actor, above=0.45cm of tech] (whop) {Warehouse\\Operator};
+  \node[actor, below=0.45cm of tech] (viewer) {Viewer};
+
+  % Links
+  % All authenticated users use login/logout
+  \draw[link] (sysadmin) -- (login.west);
+  \draw[link] (tadmin)   -- (login.west);
+  \draw[link] (catmgr)   -- (login.west);
+  \draw[link] (pm)       -- (login.west);
+  \draw[link] (whop)     -- (login.east);
+  \draw[link] (tech)     -- (login.east);
+  \draw[link] (viewer)   -- (login.east);
+
+  % Administration
+  \draw[link] (sysadmin) -- (user.west);
+  \draw[link] (sysadmin) -- (audit.west);
+  \draw[link] (tadmin)   -- (user.west);
+  \draw[link] (tadmin)   -- (audit.west);
+
+  % Business actors
+  \draw[link] (catmgr) -- (catalog.west);
+  \draw[link] (pm)     -- (project.west);
+  \draw[link] (pm)     -- (equip.west);
+  \draw[link] (pm)     -- (dash.west);
+  \draw[link] (whop)   -- (wh.east);
+  \draw[link] (whop)   -- (move.east);
+  \draw[link] (tech)   -- (equip.east);
+  \draw[link] (viewer) -- (dash.east);
+\end{tikzpicture}%
+}
+\caption{Biểu đồ trường hợp sử dụng tổng quan của hệ thống Cirtell.}
+\label{fig:usecase}
+\end{figure}
+
+\section{Đặc tả các use case chính}
+\label{sec:usecase_spec}
+
+\begin{xltabular}{\textwidth}{|>{\bfseries}p{4.5cm}|X|}
+    \hline
+    \textbf{Mục} & \textbf{Nội dung} \\
+    \hline
+    Use Case Name & Đăng nhập hệ thống \\
+    \hline
+    Actor(s) & Tất cả người dùng đã được cấp tài khoản \\
+    \hline
+    Summary Description & Cho phép người dùng xác thực qua Azure AD và nhận JWT nội bộ để truy cập các chức năng nghiệp vụ phù hợp với vai trò được cấp. \\
+    \hline
+    Priority & Must Have \\
+    \hline
+    Pre-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Người dùng đã được cấp tài khoản trong tenant.
+        \item Hệ thống hoạt động bình thường, kết nối Azure AD ổn định.
+    \end{itemize} \\
+    \hline
+    Post-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Backend cấp JWT chứa \texttt{user\_id, tenant\_id, roles}.
+        \item Frontend lưu JWT trong bộ nhớ ngắn hạn và điều hướng đến dashboard.
+        \item Hệ thống ghi audit log đăng nhập (\texttt{success}).
+    \end{itemize} \\
+    \hline
+    Basic Path &
+    \begin{enumerate}[leftmargin=*, nosep]
+        \item Người dùng truy cập trang đăng nhập.
+        \item Hệ thống chuyển hướng đến cổng xác thực Azure AD (MSAL).
+        \item Người dùng nhập tài khoản và mật khẩu.
+        \item Azure AD trả về \emph{ID token}.
+        \item Backend xác thực ID token, truy vấn vai trò trong tenant.
+        \item Backend cấp JWT nội bộ và trả về cho frontend.
+        \item Frontend điều hướng người dùng tới dashboard tương ứng.
+    \end{enumerate} \\
+    \hline
+    Alternative Paths &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item \textbf{1a. Tài khoản chưa thuộc tenant nào.} Hệ thống từ chối, ghi audit log \texttt{denied}, hiển thị thông báo liên hệ quản trị viên.
+        \item \textbf{1b. Phiên hết hạn.} Frontend phát hiện 401 và chuyển về trang đăng nhập, hiển thị thông báo.
+    \end{itemize} \\
+    \hline
+    Business Rules &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item BR1: Một tài khoản có thể thuộc nhiều tenant nhưng phải chọn tenant khi đăng nhập.
+        \item BR2: JWT có thời hạn 60 phút, có cơ chế refresh.
+        \item BR3: Audit log lưu \texttt{user\_id, ip, user\_agent, timestamp, status}.
+    \end{itemize} \\
+    \hline
+    \caption{Đặc tả Use Case: Đăng nhập hệ thống} \\
+\end{xltabular}
+
+\begin{xltabular}{\textwidth}{|>{\bfseries}p{4.5cm}|X|}
+    \hline
+    \textbf{Mục} & \textbf{Nội dung} \\
+    \hline
+    Use Case Name & Đánh giá thiết bị trong dự án \\
+    \hline
+    Actor(s) & Field Technician, Project Manager \\
+    \hline
+    Summary Description & Cho phép kỹ thuật viên ghi nhận tình trạng kỹ thuật, khối lượng và phương án xử lý của từng đơn vị thiết bị trong một dự án đang ở trạng thái \texttt{Assessment}. \\
+    \hline
+    Priority & Must Have \\
+    \hline
+    Pre-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Người dùng đã đăng nhập với vai trò có quyền đánh giá.
+        \item Dự án ở trạng thái \texttt{Assessment} hoặc \texttt{In Progress}.
+        \item Bản ghi thiết bị đã tồn tại trong dự án (đã thêm từ catalog hoặc nhập mới).
+    \end{itemize} \\
+    \hline
+    Post-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Bản ghi \texttt{project\_equipment} được cập nhật với \texttt{condition}, \texttt{disposition}, \texttt{weight\_exact\_kg}, \texttt{estimated\_value}.
+        \item Hệ thống tính lại \texttt{estimated\_value} dựa trên ma trận giá tham chiếu nếu chưa nhập tay.
+        \item Audit log ghi nhận thao tác đánh giá.
+    \end{itemize} \\
+    \hline
+    Basic Path &
+    \begin{enumerate}[leftmargin=*, nosep]
+        \item Người dùng mở chi tiết dự án, vào tab \emph{Equipment}.
+        \item Người dùng chọn một thiết bị trong danh sách.
+        \item Người dùng cập nhật \texttt{condition} (Reusable / Repairable / Scrap / \dots).
+        \item Người dùng nhập \texttt{weight\_exact\_kg} và đính kèm bằng chứng (tùy chọn).
+        \item Người dùng chọn \texttt{disposition} (Refurbish / Recycle / Pending).
+        \item Hệ thống xác thực dữ liệu, lưu thay đổi, tính lại \texttt{estimated\_value}.
+        \item Hệ thống cập nhật KPI tổng hợp của dự án.
+    \end{enumerate} \\
+    \hline
+    Alternative Paths &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item \textbf{1a. Dữ liệu khối lượng âm hoặc lớn bất thường.} Hệ thống từ chối, hiển thị cảnh báo dữ liệu sai.
+        \item \textbf{2a. Thiết bị đã được phân bổ vào kho.} Hệ thống cảnh báo, yêu cầu thu hồi khỏi kho trước khi cập nhật \texttt{disposition} mới.
+    \end{itemize} \\
+    \hline
+    Business Rules &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item BR1: \texttt{condition} bắt buộc với mọi thiết bị trước khi rời trạng thái \texttt{Assessment}.
+        \item BR2: \texttt{disposition = Recycle} bắt buộc kèm \texttt{condition $\in$ \{Scrap, Hazardous, Contaminated\}}.
+        \item BR3: Mọi thay đổi \texttt{condition / disposition} phải được ghi audit log đầy đủ.
+    \end{itemize} \\
+    \hline
+    \caption{Đặc tả Use Case: Đánh giá thiết bị trong dự án} \\
+\end{xltabular}
+
+\begin{xltabular}{\textwidth}{|>{\bfseries}p{4.5cm}|X|}
+    \hline
+    \textbf{Mục} & \textbf{Nội dung} \\
+    \hline
+    Use Case Name & Chuyển kho thiết bị \\
+    \hline
+    Actor(s) & Warehouse Operator \\
+    \hline
+    Summary Description & Cho phép cán bộ kho chuyển một số lượng nhất định của một \texttt{part} từ kho nguồn sang kho đích, đảm bảo tổng tồn kho toàn tenant không đổi và mỗi thay đổi đều có lưu vết. \\
+    \hline
+    Pre-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Kho nguồn và kho đích cùng thuộc tenant của người dùng và khác nhau.
+        \item Bản ghi \texttt{warehouse\_stock(warehouse=nguồn, part)} có \texttt{quantity} đủ ở trạng thái \texttt{In Stock} (không tính phần \texttt{Allocated/Shipped}).
+    \end{itemize} \\
+    \hline
+    Post-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Bản ghi \texttt{warehouse\_stock} của kho nguồn giảm \texttt{quantity} tương ứng.
+        \item Bản ghi \texttt{warehouse\_stock} của kho đích tăng \texttt{quantity} tương ứng (tạo mới nếu chưa có).
+        \item Hệ thống tạo cặp \texttt{movement} (\texttt{OUT} từ kho nguồn, \texttt{IN} vào kho đích) cùng \texttt{reference} để đối soát.
+        \item Audit log lưu thao tác chuyển kho.
+    \end{itemize} \\
+    \hline
+    Basic Path &
+    \begin{enumerate}[leftmargin=*, nosep]
+        \item Người dùng chọn kho nguồn và xem danh sách \texttt{warehouse\_stock} hiện có.
+        \item Người dùng chọn \texttt{part}, nhập \texttt{quantity} cần chuyển và chọn kho đích.
+        \item Hệ thống xác thực ràng buộc nghiệp vụ (kho khác nhau, cùng tenant, đủ tồn).
+        \item Hệ thống tạo cặp \texttt{movement} và cập nhật \texttt{warehouse\_stock} của cả hai kho trong cùng một transaction.
+        \item Hệ thống hiển thị xác nhận thành công và \texttt{movement\_id} sinh ra.
+    \end{enumerate} \\
+    \hline
+    Alternative Paths &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item \textbf{2a. Kho nguồn không đủ tồn.} Hệ thống từ chối, hiển thị \texttt{quantity} khả dụng thực tế.
+        \item \textbf{2b. Kho đích trùng kho nguồn.} Hệ thống từ chối, yêu cầu chọn kho khác.
+        \item \textbf{4a. Lỗi transaction.} Hệ thống rollback toàn bộ, không tạo \texttt{movement} và không đổi \texttt{warehouse\_stock}.
+    \end{itemize} \\
+    \hline
+    Business Rules &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item BR1: Kho nguồn và kho đích phải khác nhau và cùng \texttt{tenant\_id}.
+        \item BR2: Tổng \texttt{quantity} của một \texttt{part} toàn tenant không đổi sau giao dịch.
+        \item BR3: Một giao dịch chuyển kho phải atomic; lỗi giữa chừng phải rollback.
+    \end{itemize} \\
+    \hline
+    \caption{Đặc tả Use Case: Chuyển kho thiết bị} \\
+\end{xltabular}
+
+\begin{xltabular}{\textwidth}{|>{\bfseries}p{4.5cm}|X|}
+    \hline
+    \textbf{Mục} & \textbf{Nội dung} \\
+    \hline
+    Use Case Name & Quản lý phụ tùng (tạo/cập nhật \texttt{part}) \\
+    \hline
+    Actor(s) & Catalog Manager \\
+    \hline
+    Summary Description & Cho phép người quản trị danh mục tạo mới hoặc cập nhật một bản ghi \texttt{part} trong tenant, bao gồm gắn vendor, technology, equipment\_type và các thuộc tính kỹ thuật phục vụ cho đánh giá thiết bị và quản lý tồn kho. \\
+    \hline
+    Priority & Must Have \\
+    \hline
+    Pre-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Người dùng đã đăng nhập với vai trò Catalog Manager trong tenant.
+        \item Các danh mục \texttt{vendors}, \texttt{technologies}, \texttt{equipment\_types} đã có dữ liệu tham chiếu.
+    \end{itemize} \\
+    \hline
+    Post-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Bản ghi \texttt{parts} được tạo mới hoặc cập nhật trong tenant.
+        \item Hệ thống cập nhật chỉ mục tìm kiếm space-insensitive cho \texttt{part\_number}.
+        \item Audit log lưu hành động \texttt{create} hoặc \texttt{update} kèm \texttt{before/after}.
+    \end{itemize} \\
+    \hline
+    Basic Path &
+    \begin{enumerate}[leftmargin=*, nosep]
+        \item Người dùng mở trang Parts Catalog và chọn \emph{Thêm mới} hoặc bản ghi cần sửa.
+        \item Người dùng nhập \texttt{part\_number}, \texttt{description} và chọn \texttt{vendor}, \texttt{technology}, \texttt{equipment\_type}.
+        \item Người dùng (tùy chọn) nhập \texttt{co2\_factor\_kg} và các thuộc tính kỹ thuật.
+        \item Hệ thống validate dữ liệu phía client và phía server (Zod schema).
+        \item Hệ thống kiểm tra tính duy nhất của \texttt{part\_number} trong tenant.
+        \item Hệ thống lưu bản ghi, ghi audit log và trả về \texttt{part\_id}.
+        \item UI làm mới danh sách và hiển thị thông báo thành công.
+    \end{enumerate} \\
+    \hline
+    Alternative Paths &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item \textbf{5a. \texttt{part\_number} đã tồn tại trong tenant.} Hệ thống từ chối, hiển thị thông báo trùng và liên kết đến bản ghi hiện có.
+        \item \textbf{2a. Vendor/technology/equipment\_type không tồn tại.} Hệ thống chặn submit, gợi ý người dùng tạo danh mục trước.
+        \item \textbf{4a. Dữ liệu không hợp lệ.} Hệ thống hiển thị thông báo lỗi cụ thể từng trường.
+    \end{itemize} \\
+    \hline
+    Business Rules &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item BR1: \texttt{part\_number} duy nhất theo cặp (\texttt{tenant\_id}, \texttt{part\_number}) sau khi loại bỏ khoảng trắng.
+        \item BR2: Không được xóa \texttt{part} nếu đang được tham chiếu bởi \texttt{project\_equipment} hoặc \texttt{warehouse\_stock} (\texttt{ON DELETE RESTRICT}).
+        \item BR3: Mọi thay đổi đều ghi audit log với \texttt{before/after} JSON.
+    \end{itemize} \\
+    \hline
+    \caption{Đặc tả Use Case: Quản lý phụ tùng} \\
+\end{xltabular}
+
+\begin{xltabular}{\textwidth}{|>{\bfseries}p{4.5cm}|X|}
+    \hline
+    \textbf{Mục} & \textbf{Nội dung} \\
+    \hline
+    Use Case Name & Chuyển trạng thái dự án \\
+    \hline
+    Actor(s) & Project Manager \\
+    \hline
+    Summary Description & Cho phép người phụ trách dự án chuyển trạng thái workflow của một dự án theo automaton \texttt{Draft $\rightarrow$ Assessment $\rightarrow$ In Progress $\rightarrow$ Completed}, đồng thời ghi nhận lý do, người thực hiện và thời điểm chuyển trạng thái phục vụ kiểm toán. \\
+    \hline
+    Priority & Must Have \\
+    \hline
+    Pre-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Người dùng đã đăng nhập với vai trò Project Manager hoặc Tenant Admin trong tenant của dự án.
+        \item Dự án tồn tại và không bị khóa bởi giao dịch đang chạy.
+    \end{itemize} \\
+    \hline
+    Post-Condition &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item Trường \texttt{projects.status} được cập nhật sang trạng thái mới hợp lệ.
+        \item Hệ thống ghi audit log bao gồm \texttt{from\_status}, \texttt{to\_status}, \texttt{reason} và \texttt{user\_id}.
+        \item Các KPI tổng hợp ở dashboard được tính lại theo trạng thái mới.
+    \end{itemize} \\
+    \hline
+    Basic Path &
+    \begin{enumerate}[leftmargin=*, nosep]
+        \item Người dùng mở chi tiết dự án ở tab \emph{Overview}.
+        \item Người dùng bấm nút \emph{Chuyển trạng thái} và chọn trạng thái đích hợp lệ trong danh sách gợi ý.
+        \item Người dùng nhập \texttt{reason} (bắt buộc khi quay lui hoặc đóng dự án).
+        \item Hệ thống kiểm tra điều kiện chuyển trạng thái theo automaton và các ràng buộc nghiệp vụ.
+        \item Hệ thống cập nhật \texttt{projects.status} và ghi audit log trong cùng một transaction.
+        \item UI hiển thị trạng thái mới và làm mới badge trạng thái.
+    \end{enumerate} \\
+    \hline
+    Alternative Paths &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item \textbf{2a. Trạng thái đích không hợp lệ.} Hệ thống từ chối với mã \texttt{INVALID\_TRANSITION} và liệt kê các trạng thái đích cho phép.
+        \item \textbf{4a. Quay lui từ \texttt{Assessment} về \texttt{Draft} khi đã có thiết bị được đánh giá.} Hệ thống chặn, yêu cầu xóa các đánh giá hoặc đảo về \texttt{Pending} trước.
+        \item \textbf{4b. Đóng dự án (\texttt{Completed}) khi còn thiết bị chưa có \texttt{disposition}.} Hệ thống chặn, hiển thị danh sách thiết bị thiếu thông tin.
+    \end{itemize} \\
+    \hline
+    Business Rules &
+    \begin{itemize}[leftmargin=*, nosep]
+        \item BR1: Chuyển trạng thái chỉ theo các cạnh hợp lệ của automaton; cấm nhảy cóc.
+        \item BR2: Khi vào trạng thái \texttt{Completed}, mọi \texttt{project\_equipment} phải có \texttt{condition} và \texttt{disposition}.
+        \item BR3: Mọi chuyển trạng thái đều phải atomic và ghi audit log; rollback nếu một trong hai thao tác lỗi.
+    \end{itemize} \\
+    \hline
+    \caption{Đặc tả Use Case: Chuyển trạng thái dự án} \\
+\end{xltabular}
+
+\section{Thiết kế kiến trúc tổng thể}
+\label{sec:architecture}
+
+\subsection{Kiến trúc 3 lớp logic}
+Hệ thống được tổ chức theo kiến trúc 3 lớp logic, mỗi lớp có trách nhiệm rõ ràng và giao tiếp với lớp khác qua giao diện chuẩn:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Lớp trình bày (Presentation Layer):} ứng dụng SPA viết bằng React + TypeScript, triển khai trên Cloudflare Pages. Chịu trách nhiệm trình bày UI, quản lý trạng thái phía client với Zustand, gọi API qua fetch và biểu diễn dữ liệu thông qua Recharts.
+    \item \textbf{Lớp dịch vụ (Service Layer):} các API REST viết bằng Hono trên Cloudflare Workers \cite{cloudflareWorkers, honoFramework}. Lớp này quản lý xác thực, phân quyền RBAC, validate dữ liệu, thực thi nghiệp vụ và gọi xuống lớp dữ liệu.
+    \item \textbf{Lớp dữ liệu (Data Layer):} cơ sở dữ liệu Cloudflare D1 \cite{cloudflareD1}, được quản lý bằng hệ thống migration SQL phiên bản hóa. Mọi truy vấn được thực hiện qua prepared statement nhằm chống SQL injection.
+\end{itemize}
+
+\subsection{Kiến trúc triển khai trên Cloudflare}
+Triển khai hệ thống trên Cloudflare gồm các thành phần:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Cloudflare Pages:} hosting bundle SPA; tích hợp với GitHub để triển khai liên tục mỗi commit.
+    \item \textbf{Cloudflare Workers:} thực thi backend Hono; mỗi route được khai báo middleware xác thực JWT, RBAC và logging.
+    \item \textbf{Cloudflare D1:} cơ sở dữ liệu SQLite phân tán; binding vào Workers theo cấu hình \texttt{wrangler.toml}.
+    \item \textbf{Cloudflare R2 (tùy chọn):} lưu trữ file đính kèm như ảnh đánh giá thiết bị.
+    \item \textbf{Azure AD:} cung cấp dịch vụ xác thực doanh nghiệp; thông qua MSAL \cite{msalDoc}.
+\end{itemize}
+
+\subsection{Luồng xử lý request điển hình}
+Một request nghiệp vụ điển hình đi qua các bước:
+
+\begin{enumerate}[leftmargin=1.2cm]
+    \item Người dùng tương tác với UI; React component gọi service layer phía client.
+    \item Service client gắn JWT vào header và gửi request HTTPS đến Workers.
+    \item Middleware xác thực JWT, kiểm tra hạn dùng và chữ ký.
+    \item Middleware RBAC kiểm tra permission tương ứng với endpoint.
+    \item Handler nghiệp vụ validate dữ liệu, chạy logic, ghi audit log, gọi truy vấn D1.
+    \item D1 thực thi prepared statement, trả kết quả.
+    \item Handler chuẩn hóa kết quả thành JSON, kèm metadata (paging, total).
+    \item Response trả về frontend; UI cập nhật trạng thái và render.
+\end{enumerate}
+
+\subsection{Mô hình tách module backend}
+Mã nguồn backend được tổ chức theo \emph{feature module}, mỗi module gồm:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{routes.ts} -- khai báo các endpoint REST.
+    \item \texttt{handlers.ts} -- chứa logic nghiệp vụ.
+    \item \texttt{repository.ts} -- chứa truy vấn D1 và mapping.
+    \item \texttt{schema.ts} -- mô tả kiểu dữ liệu và validator (Zod hoặc tương đương).
+\end{itemize}
+
+Phân tách này đảm bảo nguyên tắc \emph{Single Responsibility} và dễ test từng tầng độc lập. Mô hình triển khai tổng thể trên hạ tầng Cloudflare và Azure AD được minh họa ở Hình~\ref{fig:architecture}.
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=1.4cm and 1.6cm,
+  layer/.style={draw, thick, rounded corners=4pt, minimum height=1.6cm, align=center, font=\small, text width=3.6cm},
+  client/.style={layer, fill=blue!10},
+  edge/.style={layer, fill=orange!15},
+  api/.style={layer, fill=green!12},
+  data/.style={layer, fill=purple!12},
+  ext/.style={layer, fill=gray!12, dashed},
+  arr/.style={-{Latex[length=2.2mm]}, thick}
+]
+  \node[client] (browser) {\textbf{Trình duyệt người dùng}\\React + TypeScript SPA};
+  \node[edge, right=of browser] (pages) {\textbf{Cloudflare Pages}\\CDN tĩnh + CI/CD};
+  \node[api, right=of pages] (workers) {\textbf{Cloudflare Workers}\\Hono REST API\\JWT + RBAC};
+  \node[data, right=of workers] (d1) {\textbf{Cloudflare D1}\\SQLite phân tán\\Prepared statements};
+  \node[ext, above=1.6cm of workers] (aad) {\textbf{Azure AD}\\OAuth2 / OIDC\\(MSAL)};
+  \node[data, below=1.6cm of d1] (r2) {\textbf{Cloudflare R2}\\Object storage\\(ảnh, biên bản)};
+
+  \draw[arr] ([yshift=4pt]browser.east) -- node[above, font=\scriptsize]{HTTPS} ([yshift=4pt]pages.west);
+  \draw[arr] ([yshift=-4pt]pages.west) -- node[below, font=\scriptsize]{Bundle SPA} ([yshift=-4pt]browser.east);
+  \draw[arr] (browser.north) to[bend left=20] node[above, font=\scriptsize, sloped]{OIDC login} (aad.west);
+  \draw[arr] (aad.south) -- node[right, font=\scriptsize]{JWKS / verify} (workers.north);
+  \draw[arr] (browser.south) to[bend right=22] node[below, font=\scriptsize, sloped]{REST + JWT} (workers.south);
+  \draw[arr] (workers.east) -- node[above, font=\scriptsize]{SQL} (d1.west);
+  \draw[arr] (workers.south) to[bend right=18] node[below, font=\scriptsize, sloped]{S3 API} (r2.west);
+\end{tikzpicture}%
+}
+\caption{Kiến trúc triển khai serverless của hệ thống Cirtell trên Cloudflare và Azure AD.}
+\label{fig:architecture}
+\end{figure}
+
+\section{Thiết kế mô hình dữ liệu}
+\label{sec:erd}
+
+\subsection{Các thực thể chính}
+Mô hình dữ liệu Cirtell ở mức logic gồm 13 thực thể chính (Bảng~\ref{tab:entities}). Sơ đồ ERD rút gọn được trình bày ở Hình~\ref{fig:erd}.
+
+\begin{table}[H]
+\centering
+\caption{Danh sách thực thể chính và thuộc tính tiêu biểu.}
+\label{tab:entities}
+\begin{tabularx}{\textwidth}{|>{\bfseries\ttfamily\small}p{3.2cm}|>{\small}X|}
+\hline
+\textbf{Thực thể} & \textbf{Thuộc tính tiêu biểu} \\
+\hline
+tenants & \texttt{tenant\_id}, \texttt{code}, \texttt{name}, \texttt{status} -- đơn vị doanh nghiệp dùng hệ thống. \\
+\hline
+users & \texttt{user\_id}, \texttt{email}, \texttt{display\_name}, \texttt{status} -- tài khoản người dùng. \\
+\hline
+user\_tenants & \texttt{user\_id}, \texttt{tenant\_id}, \texttt{role} -- gán người dùng vào tenant kèm vai trò RBAC. \\
+\hline
+vendors & \texttt{vendor\_id}, \texttt{name}, \texttt{country} -- danh mục nhà sản xuất. \\
+\hline
+technologies & \texttt{technology\_id}, \texttt{name}, \texttt{generation} -- 2G/3G/4G/5G/Microwave/Fibre. \\
+\hline
+equipment\_types & \texttt{equipment\_type\_id}, \texttt{name}, \texttt{category} -- Antenna/RRU/BBU/\dots \\
+\hline
+parts & \texttt{part\_id}, \texttt{tenant\_id}, \texttt{vendor\_id}, \texttt{technology\_id}, \texttt{equipment\_type\_id}, \texttt{part\_number}, \texttt{description}, \texttt{co2\_factor\_kg}. \\
+\hline
+projects & \texttt{project\_id}, \texttt{tenant\_id}, \texttt{name}, \texttt{site}, \texttt{status}, \texttt{start\_date}, \texttt{end\_date}, \texttt{manager\_id}. \\
+\hline
+project\_equipment & \texttt{project\_equipment\_id}, \texttt{project\_id}, \texttt{part\_id}, \texttt{serial}, \texttt{condition}, \texttt{disposition}, \texttt{weight\_exact\_kg}, \texttt{estimated\_value}, \texttt{actual\_value}. \\
+\hline
+warehouses & \texttt{warehouse\_id}, \texttt{tenant\_id}, \texttt{code}, \texttt{name}, \texttt{address}, \texttt{capacity}. \\
+\hline
+warehouse\_stock & \texttt{stock\_id}, \texttt{warehouse\_id}, \texttt{part\_id}, \texttt{quantity}, \texttt{status}. \\
+\hline
+movements & \texttt{movement\_id}, \texttt{source\_warehouse\_id}, \texttt{dest\_warehouse\_id}, \texttt{part\_id}, \texttt{quantity}, \texttt{movement\_type}, \texttt{reference}, \texttt{created\_by}, \texttt{created\_at}. \\
+\hline
+audit\_logs & \texttt{audit\_id}, \texttt{user\_id}, \texttt{tenant\_id}, \texttt{entity\_type}, \texttt{entity\_id}, \texttt{action}, \texttt{before}, \texttt{after}, \texttt{ip}, \texttt{user\_agent}, \texttt{created\_at}. \\
+\hline
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  >={Latex[length=2mm]},
+  ent/.style={draw, thick, rectangle, rounded corners=2pt,
+              minimum width=2.9cm, minimum height=0.8cm,
+              align=center, font=\small\ttfamily, fill=yellow!12},
+  rel/.style={->, thick, gray!75},
+  lbl/.style={font=\scriptsize, fill=white, inner sep=1pt}
+]
+  % ----- Absolute grid (x in cm, y in cm) -----
+  % Row 1 (y=0):  identity
+  \node[ent] (users)   at ( 0, 0) {users};
+  \node[ent] (ut)      at ( 4, 0) {user\_tenants};
+  \node[ent] (tenants) at ( 8, 0) {tenants};
+
+  % Row 2 (y=-3): catalog dimensions
+  \node[ent] (vendors) at ( 0,-3) {vendors};
+  \node[ent] (tech)    at ( 4,-3) {technologies};
+  \node[ent] (etype)   at ( 8,-3) {equipment\_types};
+
+  % Row 3 (y=-6): parts hub (centered) + projects (left) + warehouses (right)
+  \node[ent] (projects) at ( 0,-6) {projects};
+  \node[ent] (parts)    at ( 4,-6) {parts};
+  \node[ent] (wh)       at ( 8,-6) {warehouses};
+
+  % Row 4 (y=-9): operational facts
+  \node[ent] (pe)       at ( 0,-9) {project\_equipment};
+  \node[ent] (ws)       at ( 4,-9) {warehouse\_stock};
+  \node[ent] (mv)       at ( 8,-9) {movements};
+
+  % Row 5 (y=-12): audit (centered)
+  \node[ent] (audit)    at ( 4,-12) {audit\_logs};
+
+  % --- Identity links ---
+  \draw[rel] (users.east)   -- node[lbl, above]{1..N} (ut.west);
+  \draw[rel] (tenants.west) -- node[lbl, above]{1..N} (ut.east);
+
+  % --- Catalog (global dim) -> parts ---
+  \draw[rel] (vendors.south) -- node[lbl, pos=0.5, sloped, above]{1..N} (parts.north west);
+  \draw[rel] (tech.south)    -- node[lbl, right]{1..N} (parts.north);
+  \draw[rel] (etype.south)   -- node[lbl, pos=0.5, sloped, above]{1..N} (parts.north east);
+
+  % --- Parts -> facts ---
+  \draw[rel] (parts.south west) -- node[lbl, pos=0.5, sloped, above]{1..N} (pe.north east);
+  \draw[rel] (parts.south)      -- node[lbl, right]{1..N} (ws.north);
+  \draw[rel] (parts.south east) -- node[lbl, pos=0.5, sloped, above]{1..N} (mv.north west);
+
+  % --- Project / Warehouse -> facts ---
+  \draw[rel] (projects.south) -- node[lbl, right]{1..N} (pe.north);
+  \draw[rel] (wh.south west)  -- node[lbl, pos=0.5, sloped, above]{1..N} (ws.north east);
+  \draw[rel] (wh.south)       -- node[lbl, right]{src/dst} (mv.north);
+
+  % --- Users -> audit (route around left/bottom) ---
+  \draw[rel] (users.west) -- ++(-0.6,0) |- node[lbl, pos=0.95, above]{actor} (audit.west);
+\end{tikzpicture}%
+}
+\caption{Sơ đồ ERD rút gọn của hệ thống Cirtell.}
+\label{fig:erd}
+\end{figure}
+
+\subsection{Quan hệ chính}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Một \texttt{tenant} có nhiều \texttt{users} (qua bảng nối) -- nhiều \texttt{parts} -- nhiều \texttt{projects} -- nhiều \texttt{warehouses}.
+    \item Mỗi \texttt{project} chứa nhiều \texttt{project\_equipment}; mỗi \texttt{project\_equipment} tham chiếu một \texttt{part} (catalog).
+    \item Mỗi \texttt{warehouse} có nhiều bản ghi \texttt{warehouse\_stock} chia theo \texttt{part\_id} và \texttt{status}.
+    \item Mỗi \texttt{movement} liên kết hai \texttt{warehouses} (nguồn/đích) và một \texttt{part}.
+\end{itemize}
+
+\subsection{Ràng buộc và chỉ mục}
+Các ràng buộc khóa ngoại được khai báo bằng \texttt{ON DELETE RESTRICT} cho các quan hệ catalog (parts, vendors, technologies) để tránh xóa nhầm. Các chỉ mục tổ hợp được tạo để tối ưu các truy vấn phổ biến:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{idx\_parts\_tenant\_vendor\_tech} trên \texttt{parts(tenant\_id, vendor\_id, technology\_id)}.
+    \item \texttt{idx\_project\_equipment\_project} trên \texttt{project\_equipment(project\_id)}.
+    \item \texttt{idx\_warehouse\_stock\_warehouse\_part} trên \texttt{warehouse\_stock(warehouse\_id, part\_id, status)}.
+    \item \texttt{idx\_audit\_logs\_tenant\_entity} trên \texttt{audit\_logs(tenant\_id, entity\_type, entity\_id)}.
+\end{itemize}
+
+\subsection{Chiến lược tenant-scoping}
+Mọi truy vấn nghiệp vụ đều bắt buộc kèm điều kiện \texttt{tenant\_id = ?} dựa trên \texttt{tenant\_id} trong JWT. Repository được thiết kế để \emph{không} chấp nhận hàm truy vấn nếu thiếu tham số tenant; điều này được kiểm tra ở mức code review và unit test.
+
+\section{Thiết kế chức năng theo module}
+\label{sec:modules}
+
+\subsection{Module 1 -- Parts Catalog}
+\paragraph{API.} CRUD trên \texttt{/parts} với phân trang, lọc theo \texttt{vendor / technology / equipment\_type}; endpoint \texttt{/parts/search?q=} thực hiện tìm kiếm space-insensitive bằng truy vấn:
+\begin{center}
+\texttt{REPLACE(part\_number,' ','') LIKE REPLACE(?, ' ', '')}
+\end{center}
+
+\paragraph{UI.} Trang danh sách dạng bảng với các cột chính \texttt{part\_number, vendor, technology, equipment\_type, description}. Các bộ lọc đa tiêu chí ở thanh trên; modal thêm/sửa với validation phía client. Modal xác nhận khi xóa.
+
+\subsection{Module 2 -- Project Lifecycle}
+\paragraph{Workflow.} Trạng thái dự án theo automaton:
+\[
+    \texttt{Draft} \rightarrow \texttt{Assessment} \rightarrow \texttt{In Progress} \rightarrow \texttt{Completed}
+\]
+Cho phép quay lui từ \texttt{Assessment} về \texttt{Draft} chỉ khi không có thiết bị đã đánh giá. Mỗi chuyển trạng thái đều ghi audit log.
+
+\paragraph{UI.} Trang danh sách dự án với filter theo status, search theo tên/site. Trang chi tiết dự án dạng tab: \emph{Overview}, \emph{Equipment}, \emph{Financials}, \emph{Activity}.
+
+\subsection{Module 3 -- Project Equipment}
+\paragraph{API.} CRUD \texttt{/projects/:id/equipment}; endpoint \texttt{/projects/:id/equipment/lookup?part\_number=} hỗ trợ tra cứu nhanh từ catalog với tìm kiếm space-insensitive.
+
+\paragraph{UI.} Bảng thiết bị trong tab Equipment hỗ trợ inline edit \texttt{condition, disposition, weight, value}. Nút thao tác hàng loạt cho phép áp dụng cùng một \texttt{disposition} cho nhiều thiết bị được chọn.
+
+\subsection{Module 4 -- Inventory \& Warehouse}
+\paragraph{API.} CRUD \texttt{/warehouses}; nghiệp vụ \texttt{/movements} với hai loại: \texttt{IN}, \texttt{OUT}, được nhóm thành cặp khi chuyển kho.
+
+\paragraph{UI.} Trang Inventory Overview với KPI cards (tổng thiết bị, giá trị, phân bố trạng thái) và biểu đồ phân bố. Trang Warehouse Detail liệt kê stock theo từng \texttt{part}, có filter theo \texttt{status}.
+
+\subsection{Module 5 -- Dashboard \& Reports}
+\paragraph{Server-side aggregation.} Các API tổng hợp \texttt{/dashboard/kpi}, \texttt{/dashboard/distribution} thực hiện \texttt{GROUP BY} trực tiếp trên D1 để giảm dữ liệu truyền về frontend.
+
+\paragraph{UI.} Dashboard chính gồm các block: KPI lớn, biểu đồ tròn vendor/technology, biểu đồ cột status/disposition, danh sách top dự án.
+
+\section{Thiết kế giao diện và UX}
+\label{sec:ui}
+
+\subsection{Nguyên tắc thiết kế}
+Giao diện tuân theo các nguyên tắc:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Tính nhất quán:} cùng một loại dữ liệu được trình bày theo cùng một mẫu trong toàn hệ thống.
+    \item \textbf{Tính tối thiểu:} mỗi màn hình chỉ trình bày dữ liệu phục vụ tác vụ chính.
+    \item \textbf{Tính phản hồi:} mọi hành động đều có phản hồi trong vòng dưới 200\,ms hoặc trạng thái loading rõ ràng.
+    \item \textbf{Khả năng truy cập:} tuân thủ tối thiểu mức AA của WCAG về độ tương phản và navigation bằng bàn phím.
+\end{itemize}
+
+\subsection{Hệ thống màu và component}
+Toàn bộ giao diện sử dụng Tailwind CSS \cite{tailwindDoc} với bảng màu tinh giản: nền sáng, accent xanh dương cho thao tác chính, đỏ/cam cho cảnh báo. Bộ component dùng chung gồm: \emph{DataTable}, \emph{FormDialog}, \emph{ConfirmDialog}, \emph{KpiCard}, \emph{ChartCard}, \emph{StatusBadge}.
+
+\section{Tiến độ triển khai đến tuần 7}
+\label{sec:progress}
+
+\subsection{Bảng tiến độ chi tiết}
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.9cm} >{\raggedright\arraybackslash}p{4.4cm} >{\raggedright\arraybackslash}p{8.6cm}}
+\toprule
+\textbf{Tuần} & \textbf{Nội dung chính} & \textbf{Kết quả đầu ra} \\
+\midrule
+1 & Phân tích yêu cầu, use case, ERD, kiến trúc & Bộ FR/NFR; biểu đồ use case 5 module; ERD logic; kiến trúc 3 lớp và bản vẽ triển khai trên Cloudflare. \\
+2 & Khởi tạo dự án và hạ tầng Cloudflare & Khung React + TypeScript + Vite + Tailwind; Workers + Hono + D1; migration core (\texttt{tenants}, \texttt{users}, \texttt{vendors}, \texttt{technologies}, \texttt{equipment\_types}); cấu hình Azure AD/JWT; CI/CD Cloudflare Pages. \\
+3 & Module Parts Catalog & API CRUD parts; bộ lọc đa tiêu chí; tìm kiếm space-insensitive; UI bảng + form + modal xác nhận xóa. \\
+4 & Module Project Lifecycle & API CRUD projects và workflow trạng thái; UI danh sách dự án + chi tiết tab \emph{Overview / Equipment / Financials}. \\
+5 & Module Project Equipment & API CRUD project\_equipment; lookup từ catalog; form đánh giá ghi nhận \texttt{condition / disposition / weight / value}; inline edit bảng. \\
+6 & Module Inventory \& Warehouse & API CRUD warehouses; nghiệp vụ nhập/xuất/chuyển kho; API thống kê tồn kho; UI Inventory Overview + Warehouse Detail. \\
+7 & Tích hợp và kiểm thử giai đoạn 1 & Luồng end-to-end Parts $\rightarrow$ Projects $\rightarrow$ Equipment $\rightarrow$ Inventory; functional testing 5 module; fix bug; tối ưu UX; hoàn thiện báo cáo Chương 1--3. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Đánh giá kết quả đến tuần 7}
+Đến tuần 7, các hạng mục cốt lõi của giai đoạn 1 đã hoàn thành ở mức đủ để demo luồng nghiệp vụ chính:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Kiến trúc:} đã có kiến trúc 3 lớp và bản triển khai serverless trên Cloudflare; cấu hình CI/CD vận hành ổn định.
+    \item \textbf{Mô hình dữ liệu:} đã thống nhất giữa các module \texttt{parts}, \texttt{projects}, \texttt{project\_equipment}, \texttt{warehouses}, \texttt{warehouse\_stock}, \texttt{movements}, \texttt{audit\_logs}.
+    \item \textbf{Chức năng:} 5 module nền tảng đã có API và UI tác nghiệp; tìm kiếm space-insensitive hoạt động ổn định trên dữ liệu thử nghiệm vài nghìn bản ghi.
+    \item \textbf{Bảo mật:} JWT và RBAC đã hoạt động cho các endpoint quan trọng; audit log ghi nhận các hành động CRUD và chuyển trạng thái.
+\end{itemize}
+
+\subsection{Hạn chế và rủi ro}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Dashboard mới ở mức KPI cơ bản, chưa có biểu đồ xu hướng theo thời gian.
+    \item Chưa có xuất báo cáo PDF; chỉ mới xuất CSV cho danh sách thiết bị và tồn kho.
+    \item Bộ kiểm thử mới ở mức chức năng cho từng module; chưa thực hiện kiểm thử hiệu năng quy mô lớn và kiểm thử bảo mật chuyên sâu (penetration test).
+    \item Chưa hoàn thiện dữ liệu mẫu đa kịch bản tenant phức tạp.
+\end{itemize}
+
+\section{Tổng hợp học thuật đạt được giai đoạn 1}
+\subsection{Kiến thức chuyên môn}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Kiến trúc serverless và mô hình \emph{V8 Isolate} của Cloudflare Workers.
+    \item Thiết kế CSDL quan hệ với migration phiên bản hóa trên D1.
+    \item Mô hình RBAC theo Sandhu \cite{sandhu1996rbac} và xác thực JWT theo RFC 7519 \cite{rfc7519}.
+    \item Kinh tế tuần hoàn và quản lý vòng đời thiết bị viễn thông.
+\end{itemize}
+
+\subsection{Kỹ năng kỹ thuật}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Phát triển SPA với React + TypeScript + Vite + Tailwind CSS.
+    \item Phát triển backend REST với Hono trên Cloudflare Workers.
+    \item Sử dụng Git và CI/CD Cloudflare Pages cho phát triển liên tục.
+    \item Thiết kế dashboard với Recharts.
+\end{itemize}
+
+\subsection{Kỹ năng mềm}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Phân tích yêu cầu nghiệp vụ và mô hình hóa hệ thống thông tin.
+    \item Quản lý tiến độ theo tuần và viết tài liệu kỹ thuật.
+    \item Kỹ năng trình bày học thuật theo cấu trúc phân tích -- thiết kế -- triển khai.
+\end{itemize}
+
+\section{Kết luận chương}
+Chương 3 đã trình bày đầy đủ quá trình phân tích yêu cầu, xác định actors, đặc tả use case chính, thiết kế kiến trúc 3 lớp trên nền serverless, mô hình dữ liệu chi tiết và thiết kế các module chức năng của hệ thống Cirtell. Đến tuần 7, các kết quả đầu ra đã hình thành nền tảng kỹ thuật và nghiệp vụ vững chắc, là tiền đề trực tiếp để bước sang giai đoạn 2 với các nội dung dashboard nâng cao, báo cáo, kiểm thử toàn diện và hoàn thiện sản phẩm phục vụ bảo vệ đồ án.

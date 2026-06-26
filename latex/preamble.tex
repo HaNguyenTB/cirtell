@@ -1,0 +1,155 @@
+% !TEX encoding = UTF-8
+%======================================================================
+% 1. LỚP TÀI LIỆU VÀ ENCODING
+%======================================================================
+
+
+% Hỗ trợ gõ tiếng Việt và hiển thị đúng
+\usepackage[utf8]{vietnam}
+%\usepackage{vntex}
+\usepackage[T5]{fontenc}
+%\usepackage[utf8]{inputenc}
+
+% Thiết lập font chữ Times New Roman hoặc tương đương
+\usepackage{mathptmx} % Times New Roman cho text và math
+\usepackage[T5]{fontenc}
+\usepackage{textcomp}
+
+
+%======================================================================
+% 2. CANH LỀ VÀ LAYOUT TRANG
+%======================================================================
+% Gói geometry để tùy chỉnh lề
+\usepackage[top=3cm, bottom=3cm, left=3.5cm, right=2cm, heightrounded, headheight=15pt]{geometry}
+
+% Gói fancyhdr để tùy chỉnh đầu trang và chân trang
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{} % Xóa hết các cài đặt cũ
+\lhead{\footnotesize\leftmark} % Bên trái header: tên chapter/section
+\cfoot{\footnotesize\thepage} % Giữa footer: số trang
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% Giãn dòng (1.5)
+\usepackage{setspace}
+\onehalfspacing
+
+% Thụt đầu dòng cho đoạn đầu tiên của section
+\usepackage{indentfirst}
+
+
+%======================================================================
+% 3. CÁC GÓI TOÁN HỌC
+%======================================================================
+\usepackage{amsmath}    % Các môi trường toán học nâng cao
+\usepackage{amssymb}    % Thêm nhiều ký hiệu toán học
+\usepackage{amsthm}     % Môi trường định lý, định nghĩa
+\usepackage{latexsym}   % Một số ký hiệu toán học cũ
+\usepackage{amsbsy}     % Ký hiệu in đậm
+\numberwithin{equation}{chapter} % Đánh số công thức theo chương, ví dụ (1.1)
+
+% Định nghĩa môi trường định lý, định nghĩa,... bằng tiếng Việt
+\newtheorem{definition}{Định nghĩa}[chapter]
+\newtheorem{theorem}{Định lý}[chapter]
+\newtheorem{corollary}{Hệ quả}[chapter]
+\newtheorem{lemma}{Bổ đề}[chapter]
+
+
+%======================================================================
+% 4. HÌNH ẢNH, ĐỒ HỌA VÀ MÀU SẮC
+%======================================================================
+\usepackage{graphicx}   % Chèn ảnh (JPG, PNG, PDF)
+\usepackage{svg}        % Chèn ảnh vector SVG
+\usepackage[table, svgnames]{xcolor} % Quản lý màu sắc, hỗ trợ cho bảng
+\usepackage{tikz}       % Vẽ hình vector trực tiếp trong LaTeX
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,shapes.symbols,fit,calc,backgrounds,decorations.pathreplacing}
+\graphicspath{{./images/}{./assets/}} % Khai báo thư mục chứa ảnh
+% Cho phép xuống dòng tại dấu gạch dưới và dấu chấm trong văn bản kỹ thuật
+\usepackage{seqsplit}
+\usepackage{float}
+% Tránh chữ tràn ra ngoài lề
+\sloppy
+\emergencystretch=3em
+
+% Cài đặt cho caption của hình ảnh, bảng
+\usepackage[labelfont=bf, font=small, skip=5pt]{caption}
+\usepackage{subcaption} % Hỗ trợ tạo hình/bảng con (subfigures, subtables)
+\counterwithin{figure}{chapter} % Đánh số hình theo chương
+\counterwithin{table}{chapter}  % Đánh số bảng theo chương
+
+
+%======================================================================
+% 5. BẢNG BIỂU
+%======================================================================
+\usepackage{booktabs}   % Tạo bảng chuyên nghiệp với các lệnh \toprule, \midrule, \bottomrule
+\usepackage{tabularx}   % Bảng có thể tự động điều chỉnh độ rộng cột
+\usepackage{xltabular} % Gói quan trọng: Kết hợp longtable và tabularx
+\usepackage{enumitem}  % Để định dạng danh sách đẹp hơn
+\usepackage{geometry}
+\geometry{left=2cm,right=2cm,top=2cm,bottom=2cm}
+\renewcommand{\arraystretch}{1.4}
+\usepackage{multirow}   % Gộp ô theo hàng
+\usepackage{longtable}  % Tạo bảng có thể kéo dài qua nhiều trang
+\usepackage{array}      % Thêm các định dạng cột mới
+
+
+%======================================================================
+% 6. CHÈN MÃ NGUỒN (CODE)
+%======================================================================
+% Sử dụng minted cho đẹp và chuyên nghiệp, cần -shell-escape khi biên dịch
+\usepackage{minted}
+% Cài đặt giao diện cho minted
+\setminted{
+    frame=lines,      % Có khung
+    framesep=2mm,     % Khoảng cách từ code đến khung
+    baselinestretch=1.2,
+    fontsize=\small,  % Cỡ chữ nhỏ
+    linenos           % Hiện số dòng
+}
+
+
+%======================================================================
+% 7. TÀI LIỆU THAM KHẢO VÀ HYPERLINK
+%======================================================================
+\usepackage{csquotes}
+
+% biblatex là gói quản lý tài liệu tham khảo hiện đại và mạnh mẽ
+\usepackage[
+    backend=biber,      % Sử dụng biber (mạnh hơn bibtex)
+    style=numeric,      % Kiểu trích dẫn [1], [2]
+    sorting=none,       % Không sắp xếp, giữ nguyên thứ tự trong file .bib
+    giveninits=true     % Tên tác giả chỉ viết tắt (e.g., "D. E. Knuth")
+]{biblatex}
+\addbibresource{bibliography.bib} % Tên file .bib của bạn
+
+%%\DefineBibliographyStrings{vietnamese}{
+%%  bibliography = {Tài liệu tham khảo},
+%%  references   = {Tài liệu tham khảo},
+%%}
+
+% hyperref phải là một trong những gói được gọi cuối cùng
+\usepackage[
+    colorlinks=true,      % Vẫn bật colorlinks để chữ có thể có màu
+    linkcolor=black,      % Màu cho link nội bộ (mục lục, section) -> ĐEN
+    citecolor=black,      % Màu cho trích dẫn \cite -> ĐEN
+    urlcolor=black,       % Màu cho các đường link \url -> ĐEN
+    bookmarks=true,
+    pdfencoding=auto,
+    unicode
+]{hyperref}
+
+
+%======================================================================
+% 8. CÁC GÓI TIỆN ÍCH KHÁC
+%======================================================================
+\usepackage{enumitem}   % Tùy biến môi trường liệt kê (itemize, enumerate)
+\usepackage{pdfpages}   % Chèn các trang từ file PDF khác vào tài liệu
+\usepackage{url}        % Hỗ trợ ngắt dòng cho các đường link dài
+\usepackage[most]{tcolorbox}
+
+% Định dạng lại tiêu đề chương, mục (section, subsection)
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\centering}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{50pt}{40pt}

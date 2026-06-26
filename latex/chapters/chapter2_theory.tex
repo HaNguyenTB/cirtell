@@ -1,0 +1,220 @@
+\chapter{Cơ sở lý thuyết và quy trình nghiệp vụ}
+\label{ch:cosolythuyet}
+
+\section{Kinh tế tuần hoàn trong ngành viễn thông}
+\label{sec:circular}
+
+\subsection{Khái niệm và nguyên tắc 3R}
+Kinh tế tuần hoàn (Circular Economy) là mô hình kinh tế trong đó tài nguyên được sử dụng càng lâu càng tốt thông qua các vòng lặp tái sử dụng và tái chế, ngược với mô hình kinh tế tuyến tính \emph{khai thác -- sản xuất -- tiêu dùng -- thải bỏ} \cite{ellenmacarthur2013}. Mô hình này dựa trên ba nguyên tắc cơ bản:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Reduce} -- giảm thiểu khai thác nguyên liệu mới và tối ưu thiết kế để kéo dài tuổi thọ.
+    \item \textbf{Reuse} -- tái sử dụng thiết bị hoặc thành phần thiết bị cho mục đích ban đầu hoặc mục đích khác sau khi phục hồi.
+    \item \textbf{Recycle} -- tái chế vật liệu khi thiết bị không còn khả năng tái sử dụng.
+\end{itemize}
+
+Theo Geissdoerfer và cộng sự \cite{geissdoerfer2017}, kinh tế tuần hoàn là một \emph{paradigm} mới của phát triển bền vững, đặt mục tiêu giảm áp lực lên hệ sinh thái thông qua việc duy trì giá trị sản phẩm, vật liệu và tài nguyên trong nền kinh tế lâu nhất có thể.
+
+\subsection{Đặc thù áp dụng cho thiết bị viễn thông}
+Thiết bị viễn thông có một số đặc điểm khiến mô hình tuần hoàn đặc biệt phù hợp:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item Vòng đời công nghệ bị chi phối bởi các thế hệ chuẩn (2G, 3G, 4G, 5G); thiết bị có thể bị thay thế trước khi hỏng cơ học, do đó vẫn còn giá trị sử dụng.
+    \item Cấu trúc phần cứng dạng module (rack, slot, module) cho phép thu hồi linh kiện cấp thấp (RRU, BBU, board) phục vụ \emph{spare-part harvesting}.
+    \item Giá trị vật liệu cao (đồng, nhôm, vàng trên bảng mạch), tạo động lực kinh tế cho tái chế.
+    \item Khối lượng lớn các thiết bị cùng dòng được triển khai theo dự án, thuận lợi cho \emph{batch processing} trong refurbishment.
+\end{itemize}
+
+\subsection{Hiện thực hóa nguyên tắc 3R trong Cirtell}
+Hệ thống Cirtell hiện thực nguyên tắc 3R bằng hai trục thuộc tính chính trên mỗi đơn vị thiết bị:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Condition} -- mô tả hiện trạng kỹ thuật: \texttt{Reusable}, \texttt{Repairable}, \texttt{Scrap}, \texttt{Contaminated}, \texttt{Hazardous}.
+    \item \textbf{Disposition} -- mô tả phương án xử lý đề xuất: \texttt{Refurbish}, \texttt{Recycle}, \texttt{Pending}.
+\end{itemize}
+
+Sự kết hợp hai trục này cho phép tự động phân nhánh quy trình vận hành: thiết bị \texttt{Reusable + Refurbish} đi vào kho phục hồi; thiết bị \texttt{Scrap + Recycle} đi vào kho vật liệu; thiết bị \texttt{Hazardous} bị cô lập theo quy trình xử lý chất thải nguy hại.
+
+\section{Quản lý vòng đời thiết bị (Equipment Lifecycle Management)}
+\label{sec:eolc}
+
+\subsection{Các giai đoạn vòng đời}
+Vòng đời thiết bị viễn thông trong khuôn khổ đề tài được chuẩn hóa qua sáu giai đoạn liên tiếp:
+
+\begin{enumerate}[leftmargin=1.2cm]
+    \item \textbf{Tháo dỡ và thu hồi:} thiết bị được tháo từ trạm/site về kho trung chuyển; gắn nhãn định danh tạm thời.
+    \item \textbf{Nhập kho ban đầu:} thiết bị được tạo bản ghi trong hệ thống với serial/IMEI, thuộc tính kỹ thuật, vị trí kho.
+    \item \textbf{Đánh giá tình trạng:} kỹ thuật viên kiểm tra ngoại quan, chức năng, ghi nhận \texttt{condition} và đề xuất \texttt{disposition}.
+    \item \textbf{Phân loại và định giá:} dựa trên \texttt{condition}, hệ thống tính \texttt{estimated\_value}; sau khi xử lý sẽ ghi nhận \texttt{actual\_value}.
+    \item \textbf{Xử lý:} thiết bị đi qua một trong các nhánh \emph{Refurbish}, \emph{Recycle}, hoặc \emph{Disposal}.
+    \item \textbf{Xuất kho:} thiết bị được phân bổ cho dự án, bán ra thị trường thứ cấp hoặc chuyển sang đơn vị tái chế.
+\end{enumerate}
+
+\subsection{Mô hình thuộc tính của một đơn vị thiết bị}
+Một bản ghi thiết bị trong hệ thống được mô tả qua bốn nhóm thuộc tính:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Định danh:} \texttt{equipment\_id}, \texttt{serial}, \texttt{imei}, \texttt{part\_id}, \texttt{project\_id}, \texttt{warehouse\_id}.
+    \item \textbf{Kỹ thuật:} \texttt{vendor}, \texttt{technology}, \texttt{equipment\_type}, \texttt{model}, các thông số chuyên biệt.
+    \item \textbf{Vòng đời:} \texttt{condition}, \texttt{disposition}, \texttt{status}, \texttt{weight\_exact\_kg}, \texttt{estimated\_value}, \texttt{actual\_value}.
+    \item \textbf{Vận hành:} \texttt{created\_by}, \texttt{updated\_by}, \texttt{created\_at}, \texttt{updated\_at}, lịch sử chuyển trạng thái.
+\end{itemize}
+
+\subsection{Tính chỉ số CO$_2$ tránh phát thải}
+Theo phương pháp luận \emph{Product Life Cycle Accounting and Reporting Standard} của GHG Protocol \cite{ghgprotocol2011}, lượng phát thải CO$_2$ vòng đời sản phẩm bao gồm các giai đoạn nguyên liệu thô, sản xuất, vận chuyển, sử dụng và xử lý cuối vòng đời. Khi một thiết bị viễn thông được tái sử dụng thay vì sản xuất mới, lượng phát thải tránh được xấp xỉ bằng tổng phát thải của các giai đoạn nguyên liệu thô và sản xuất của thiết bị mới tương đương.
+
+Trong phạm vi đề tài, hệ thống áp dụng phương pháp \emph{emission-factor based}: với mỗi loại thiết bị, định nghĩa hệ số phát thải tham chiếu \texttt{co2\_factor\_kg} (kgCO$_2$/đơn vị); tổng CO$_2$ tránh phát thải được tính:
+\[
+    \mathrm{CO_2\_avoided} = \sum_{i \in \mathrm{Reused}} w_i \cdot f_i
+\]
+trong đó $w_i$ là khối lượng quy đổi và $f_i$ là hệ số phát thải tham chiếu của thiết bị $i$.
+
+\section{Quản lý tồn kho đa kho (Multi-warehouse Inventory)}
+\label{sec:inventory}
+
+\subsection{Cơ sở lý thuyết}
+Theo từ điển APICS \cite{apics2018}, \emph{inventory} bao gồm các nguyên liệu, bán thành phẩm và thành phẩm được lưu trữ phục vụ sản xuất, sửa chữa hoặc bán. Mô hình quản lý tồn kho hiện đại nhấn mạnh ba yêu cầu: \emph{visibility} (khả năng quan sát thời gian thực), \emph{traceability} (truy vết từng đơn vị) và \emph{accuracy} (tính chính xác giữa dữ liệu hệ thống và thực tế kho). Chopra và Meindl \cite{chopra2019scm} bổ sung thêm yêu cầu \emph{responsiveness}: tốc độ phản ứng với thay đổi trong nhu cầu hoặc nguồn cung.
+
+Trong bối cảnh tháo dỡ thiết bị viễn thông, tồn kho không phải dòng tuyến tính từ nhà cung cấp tới khách hàng mà là dòng \emph{reverse logistics} -- từ site về kho trung chuyển, kho phân loại, kho phục hồi và kho thành phẩm. Do đó, mô hình \emph{multi-warehouse} nhiều trạng thái là phù hợp.
+
+\subsection{Mô hình trạng thái tồn kho trong Cirtell}
+Mỗi đơn vị thiết bị hoặc lô tồn kho trong Cirtell có ba trạng thái chính:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{In Stock} -- thiết bị đang trong kho, sẵn sàng phân loại, phục hồi hoặc phân bổ.
+    \item \textbf{Allocated} -- thiết bị đã được gán cho dự án/đơn hàng nhưng chưa rời kho vật lý.
+    \item \textbf{Shipped} -- thiết bị đã xuất kho, không còn nằm trong tồn kho hiện hữu.
+\end{itemize}
+
+Các quy tắc nghiệp vụ liên quan:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Một đơn vị tồn kho không thể đồng thời ở hai kho.
+    \item Chuyển kho được biểu diễn dưới dạng cặp \texttt{movement} \emph{xuất khỏi} và \emph{nhập vào}.
+    \item Trạng thái \texttt{Allocated} không làm giảm tồn kho vật lý nhưng làm giảm tồn kho khả dụng.
+\end{itemize}
+
+\subsection{Các chỉ số quản trị tồn kho}
+Bên cạnh các chỉ số nghiệp vụ truyền thống (tổng số lượng, tổng giá trị), Cirtell bổ sung các chỉ số bền vững:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item Tỷ lệ tái sử dụng = số thiết bị có \texttt{disposition = Refurbish} / tổng số thiết bị xử lý trong kỳ.
+    \item Tỷ lệ tái chế vật liệu = khối lượng vật liệu thu hồi / khối lượng đầu vào.
+    \item Tổng CO$_2$ tránh phát thải theo mục \ref{sec:eolc}.
+    \item Tỷ lệ tồn kho \emph{slow-moving} -- thiết bị nằm trong kho quá $N$ ngày.
+\end{itemize}
+
+\section{Kiến trúc serverless cho ứng dụng web}
+\label{sec:serverless}
+
+\subsection{Đặc điểm của kiến trúc serverless}
+Kiến trúc serverless là mô hình triển khai trong đó nhà cung cấp đám mây tự động quản lý hạ tầng, cấp phát tài nguyên theo yêu cầu và tính chi phí theo lượng sử dụng thực tế. Người phát triển chỉ cần đóng gói logic nghiệp vụ dưới dạng các \emph{function} hoặc \emph{handler} sự kiện.
+
+Ưu điểm chính:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Không cần quản trị máy chủ, tự động scale theo tải.
+    \item Chi phí thấp ở quy mô nhỏ -- phù hợp đề tài học thuật.
+    \item Khoảng cách triển khai (deploy distance) ngắn -- thuận tiện CI/CD.
+\end{itemize}
+
+Hạn chế:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Giới hạn thời gian thực thi và bộ nhớ trên mỗi request.
+    \item Khó debug ở môi trường phân tán so với máy chủ truyền thống.
+    \item Một số tác vụ I/O dài hoặc kết nối liên tục cần kiến trúc bổ trợ.
+\end{itemize}
+
+\subsection{Cloudflare Workers, D1 và Pages}
+\paragraph{Cloudflare Workers \cite{cloudflareWorkers}} là môi trường thực thi JavaScript/TypeScript chạy trên hạ tầng \emph{edge} của Cloudflare, gần với người dùng cuối, độ trễ khởi động thấp nhờ mô hình \emph{V8 Isolates} thay vì container truyền thống.
+
+\paragraph{Cloudflare D1 \cite{cloudflareD1}} là cơ sở dữ liệu SQLite phân tán đặt cùng vùng với Workers; được truy cập qua một API quan hệ chuẩn, hỗ trợ migration versioned và transaction giới hạn.
+
+\paragraph{Cloudflare Pages} cung cấp dịch vụ hosting cho ứng dụng SPA, hỗ trợ tích hợp Git và build CI/CD tự động.
+
+\paragraph{Hono \cite{honoFramework}} là framework web tối ưu cho Workers, cung cấp router theo tiêu chuẩn \emph{trie}, middleware tương tự Express và bộ tiện ích tích hợp với chuẩn Web Fetch API.
+
+\subsection{Lý do chọn ngăn xếp công nghệ}
+Đối với một hệ thống quản lý tồn kho quy mô vừa với lưu lượng API biến động, ngăn xếp Cloudflare Workers + D1 + Pages mang lại các lợi ích:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Triển khai nhanh, không cần quản trị máy chủ truyền thống.
+    \item Dễ dàng tách biệt frontend (Pages) và backend (Workers) nhưng vẫn cùng một nhà cung cấp.
+    \item D1 là SQLite -- mô hình đơn giản, dễ học, đủ mạnh cho phạm vi đề tài.
+    \item Hỗ trợ tốt cho mô hình \emph{tenant-scoped} thông qua middleware.
+\end{itemize}
+
+\section{Frontend hiện đại: React, TypeScript và Tailwind CSS}
+\subsection{React và mô hình component}
+React \cite{reactDoc} là thư viện UI dựa trên ý tưởng \emph{component composition} và quản lý trạng thái một chiều. Mô hình hooks cho phép viết logic theo phong cách hàm thuần khiết, thuận lợi cho test và tái sử dụng.
+
+\subsection{TypeScript và an toàn kiểu}
+TypeScript bổ sung hệ kiểu tĩnh cho JavaScript, giúp phát hiện lỗi sớm tại thời điểm biên dịch và cải thiện độ an toàn của các API ranh giới giữa frontend và backend. Trong đề tài, các \texttt{type} được chia sẻ giữa frontend và backend cho các thực thể \texttt{Part}, \texttt{Project}, \texttt{ProjectEquipment}, \texttt{Warehouse}, \texttt{WarehouseStock}.
+
+\subsection{Tailwind CSS và utility-first}
+Tailwind CSS \cite{tailwindDoc} cung cấp tập hợp utility class tinh gọn để xây dựng giao diện responsive nhanh chóng mà không cần viết CSS thủ công. Sự kết hợp Tailwind + component React cho phép xây dựng hệ thống giao diện đồng bộ, giảm nợ kỹ thuật về CSS theo thời gian.
+
+\subsection{Trực quan hóa dữ liệu với Recharts}
+Recharts là thư viện biểu đồ dựa trên React và D3, hỗ trợ đầy đủ các dạng biểu đồ cần cho dashboard: \emph{pie}, \emph{bar}, \emph{line}, \emph{area}, \emph{stacked bar}. Với đặc thù dashboard tồn kho có nhiều chiều phân tích, Recharts đáp ứng tốt yêu cầu cấu hình linh hoạt.
+
+\section{Bảo mật ứng dụng web}
+\label{sec:security}
+
+\subsection{Xác thực JWT}
+JSON Web Token (JWT) là tiêu chuẩn được định nghĩa trong RFC 7519 \cite{rfc7519}, mô tả một chuỗi token được ký số chứa các \emph{claim} về danh tính và phiên làm việc của người dùng. JWT được sử dụng để truyền thông tin xác thực qua các cuộc gọi API mà không cần lưu phiên trên server.
+
+Trong Cirtell, JWT được sử dụng theo mô hình:
+\begin{enumerate}[leftmargin=1.2cm]
+    \item Người dùng đăng nhập qua Azure AD (MSAL) \cite{msalDoc}; nhận \emph{ID token} từ Microsoft.
+    \item Backend xác thực ID token này, sau đó cấp phát JWT nội bộ chứa \texttt{user\_id}, \texttt{tenant\_id}, \texttt{roles}.
+    \item Mọi request tiếp theo đính kèm JWT trong header \texttt{Authorization: Bearer ...}.
+    \item Middleware xác thực kiểm tra chữ ký, hạn dùng và inject context người dùng vào request.
+\end{enumerate}
+
+\subsection{Phân quyền RBAC}
+RBAC (Role-Based Access Control) \cite{sandhu1996rbac} là mô hình phân quyền dựa trên vai trò: người dùng được gán một hoặc nhiều \emph{role}, mỗi role được gán một tập \emph{permission}. Cirtell định nghĩa các vai trò chính:
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{System Admin} -- quản trị toàn hệ thống đa tenant.
+    \item \textbf{Tenant Admin} -- quản trị trong phạm vi một tenant.
+    \item \textbf{Project Manager} -- quản lý các dự án xử lý thiết bị.
+    \item \textbf{Warehouse Operator} -- quản lý nhập, xuất, chuyển kho.
+    \item \textbf{Viewer} -- chỉ đọc, phục vụ báo cáo.
+\end{itemize}
+
+Mỗi endpoint API được khai báo permission yêu cầu; middleware RBAC từ chối truy cập nếu role không có permission tương ứng.
+
+\subsection{Phòng chống các lỗ hổng phổ biến}
+Hệ thống áp dụng các biện pháp phòng chống cơ bản theo OWASP Top 10:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{SQL Injection:} sử dụng prepared statement của D1 cho mọi truy vấn động.
+    \item \textbf{XSS:} React đã thoát ký tự đặc biệt mặc định khi render; tránh \texttt{dangerouslySetInnerHTML}.
+    \item \textbf{CSRF:} sử dụng Bearer token trong header thay vì cookie phiên.
+    \item \textbf{Broken Access Control:} mọi truy vấn nghiệp vụ bắt buộc kèm \texttt{tenant\_id} từ JWT, ngăn ngừa rò rỉ dữ liệu cross-tenant.
+    \item \textbf{Sensitive Data Exposure:} không log dữ liệu nhạy cảm; thông tin xác thực truyền qua HTTPS.
+\end{itemize}
+
+\section{Quy trình nghiệp vụ tham chiếu}
+\label{sec:bpm}
+Đồ án xây dựng quy trình nghiệp vụ chuẩn hóa cho vòng đời thiết bị, gồm năm giai đoạn liên kết chặt chẽ:
+
+\textbf{Giai đoạn 1 -- Khởi tạo dự án xử lý.}\\
+Cán bộ kế hoạch tạo bản ghi dự án trong trạng thái \texttt{Draft}, ghi nhận thông tin: tên dự án, site nguồn, đơn vị thực hiện, thời gian dự kiến, người phụ trách. Hệ thống ghi audit log thao tác tạo và yêu cầu xác nhận trước khi chuyển trạng thái.
+
+\textbf{Giai đoạn 2 -- Đánh giá thiết bị.}\\
+Khi dự án chuyển sang \texttt{Assessment}, kỹ thuật viên kiểm tra từng đơn vị thiết bị tháo dỡ; ghi nhận \texttt{condition}, \texttt{weight\_exact\_kg}, đề xuất \texttt{disposition}, đính kèm bằng chứng (ảnh, biên bản). Hệ thống tính \texttt{estimated\_value} dựa trên ma trận giá tham chiếu theo \texttt{vendor + model + condition}.
+
+\textbf{Giai đoạn 3 -- Triển khai xử lý.}\\
+Dự án chuyển sang \texttt{In Progress}. Thiết bị được phân nhánh:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{Refurbish} -- chuyển vào kho phục hồi, tăng tồn kho \emph{In Stock} của kho phục hồi.
+    \item \texttt{Recycle} -- chuyển vào kho vật liệu, ghi nhận khối lượng tái chế.
+    \item \texttt{Disposal} -- xử lý theo quy trình chất thải đặc biệt.
+\end{itemize}
+Mọi chuyển kho được ghi nhận thành cặp movement \emph{xuất / nhập}.
+
+\textbf{Giai đoạn 4 -- Hoàn tất và đối soát.}\\
+Khi mọi thiết bị đã được xử lý, dự án chuyển sang \texttt{Completed}. Hệ thống tổng hợp \texttt{actual\_value}, lập báo cáo dự án và đối soát với \texttt{estimated\_value}.
+
+\textbf{Giai đoạn 5 -- Báo cáo và phân tích.}\\
+Dữ liệu dự án sau hoàn tất được tổng hợp lên dashboard tổng quan: KPI tồn kho, tỷ lệ tái sử dụng, CO$_2$ tránh phát thải, hiệu quả tài chính theo kho/vendor/technology.
+
+\section{Kết luận chương}
+Chương 2 đã hệ thống hóa nền tảng lý thuyết của đồ án, gồm bốn trụ cột: (i) kinh tế tuần hoàn áp dụng cho thiết bị viễn thông, (ii) quản lý vòng đời thiết bị và tính chỉ số bền vững, (iii) quản lý tồn kho đa kho theo mô hình reverse-logistics, (iv) các nền tảng kỹ thuật cho phép hiện thực hóa hệ thống Cirtell trên kiến trúc serverless. Các nội dung này là cơ sở trực tiếp cho việc phân tích yêu cầu, thiết kế kiến trúc và mô hình dữ liệu trình bày ở Chương 3.
