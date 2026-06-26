@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { applyD1Migrations, reset, SELF, type D1Migration } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../src';
+import { applyInventoryMovements } from '../src/services/inventorySync';
 import { createAppSessionToken } from '../src/services/auth/sessionCookie';
 
 type TestEnv = Env & { TEST_MIGRATIONS: D1Migration[] };
@@ -10,6 +11,7 @@ type JsonMap = Record<string, any>;
 const testEnv = env as unknown as TestEnv;
 
 let adminToken = '';
+let superAdminToken = '';
 
 async function run(sql: string, ...params: unknown[]) {
   return testEnv.DB.prepare(sql).bind(...params).run();
@@ -53,6 +55,9 @@ async function seedBase() {
     ) VALUES (
       'user_admin', 'admin@example.com', 'Admin User', 'Admin', 'active',
       'tenant_cirtell_default', 'company_cirtell_default', 0, 0
+    ), (
+      'user_super_admin', 'superadmin@example.com', 'Super Admin', 'Admin', 'active',
+      'tenant_cirtell_default', 'company_cirtell_default', 1, 0
     )
   `);
   await run(`
@@ -80,13 +85,20 @@ async function seedBase() {
       id, tenant_id, company_id, warehouse_id, name, zone_type, created_at
     ) VALUES
       ('zone_a', 'tenant_cirtell_default', 'company_cirtell_default', 'wh_source', 'Zone A', 'storage', '2026-01-01T00:00:00.000Z'),
-      ('zone_b', 'tenant_cirtell_default', 'company_cirtell_default', 'wh_source', 'Zone B', 'storage', '2026-01-01T00:00:00.000Z')
+      ('zone_b', 'tenant_cirtell_default', 'company_cirtell_default', 'wh_source', 'Zone B', 'storage', '2026-01-01T00:00:00.000Z'),
+      ('zone_dest', 'tenant_cirtell_default', 'company_cirtell_default', 'wh_dest', 'Destination Zone', 'storage', '2026-01-01T00:00:00.000Z')
   `);
 
   adminToken = await createAppSessionToken(testEnv, {
     userId: 'user_admin',
     email: 'admin@example.com',
     name: 'Admin User',
+    sessionVersion: 0,
+  });
+  superAdminToken = await createAppSessionToken(testEnv, {
+    userId: 'user_super_admin',
+    email: 'superadmin@example.com',
+    name: 'Super Admin',
     sessionVersion: 0,
   });
 }
@@ -118,6 +130,24 @@ async function inventoryQty(warehouseId: string, partId: string, condition = 'Go
   return row?.quantity || 0;
 }
 
+async function inventoryBucketCount(warehouseId: string, partId: string, condition = 'Good', zoneId?: string | null) {
+  const zoneClause = zoneId === undefined
+    ? ''
+    : 'AND ((zone_id IS NULL AND ? IS NULL) OR zone_id = ?)';
+  const params = zoneId === undefined
+    ? [warehouseId, partId, condition]
+    : [warehouseId, partId, condition, zoneId, zoneId];
+  const row = await first<{ count: number }>(`
+    SELECT COUNT(*) AS count
+    FROM inventory
+    WHERE warehouse_id = ?
+      AND part_id = ?
+      AND condition = ?
+      ${zoneClause}
+  `, ...params);
+  return row?.count || 0;
+}
+
 async function movementCount(transactionId?: string) {
   const row = transactionId
     ? await first<{ count: number }>('SELECT COUNT(*) AS count FROM inventory_movements WHERE transaction_id = ?', transactionId)
@@ -130,6 +160,10 @@ async function createTransaction(payload: JsonMap) {
   expect(result.response.status).toBe(201);
   expect(result.json.success).toBe(true);
   return result.json.id as string;
+}
+
+async function createWarehouseMovement(payload: JsonMap) {
+  return api('POST', '/api/warehouses/inventory/move', payload);
 }
 
 beforeEach(async () => {
@@ -187,6 +221,21 @@ describe('transaction inventory auto-sync', () => {
       ORDER BY created_at, id
     `, purchaseId, saleId, recycleId, redeployId);
     expect(rows.map((row) => row.movement_type).sort()).toEqual(['Receive', 'Ship', 'Ship', 'Transfer']);
+
+    const auditRows = await all<{ action: string; resource_type: string; resource_id: string }>(`
+      SELECT action, resource_type, resource_id
+      FROM audit_log
+      WHERE action IN ('TRANSACTION_CREATE', 'INVENTORY_MOVE_AUTO')
+      ORDER BY created_at, id
+    `);
+    expect(auditRows.filter((row) => row.action === 'TRANSACTION_CREATE')).toHaveLength(4);
+    expect(new Set(
+      auditRows
+        .filter((row) => row.action === 'TRANSACTION_CREATE')
+        .map((row) => row.resource_id),
+    )).toEqual(new Set([purchaseId, saleId, recycleId, redeployId]));
+    expect(auditRows.filter((row) => row.action === 'INVENTORY_MOVE_AUTO')).toHaveLength(4);
+    expect(auditRows.filter((row) => row.action === 'INVENTORY_MOVE_AUTO').every((row) => row.resource_type === 'inventory_movements')).toBe(true);
   });
 
   it('syncs line items and marks missing part or warehouse transactions as not_ready', async () => {
@@ -245,6 +294,14 @@ describe('transaction inventory auto-sync', () => {
     expect((await first<{ count: number }>('SELECT COUNT(*) AS count FROM transactions'))?.count).toBe(0);
     expect(await movementCount()).toBe(0);
     expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+
+    const failureAudit = await first<{ action: string; details: string }>(`
+      SELECT action, details
+      FROM audit_log
+      WHERE action = 'TRANSACTION_STOCK_SYNC_FAILED'
+    `);
+    expect(failureAudit?.action).toBe('TRANSACTION_STOCK_SYNC_FAILED');
+    expect(failureAudit?.details).toContain('INSUFFICIENT_STOCK');
   });
 
   it('allocates outbound inventory across default and named zones in stable order', async () => {
@@ -355,12 +412,15 @@ describe('transaction inventory auto-sync', () => {
       )
     `);
 
-    const dryRun = await api('POST', '/api/transactions/inventory-backfill', { dryRun: true, limit: 10 });
+    const adminDenied = await api('POST', '/api/transactions/inventory-backfill', { dryRun: true, limit: 10 });
+    expect(adminDenied.response.status).toBe(403);
+
+    const dryRun = await api('POST', '/api/transactions/inventory-backfill', { dryRun: true, limit: 10 }, superAdminToken);
     expect(dryRun.response.status).toBe(200);
     expect(dryRun.json.summary.eligible).toBe(2);
     expect(dryRun.json.results.map((row: BackfillResult) => row.transactionId)).toEqual(['bf_purchase', 'bf_sale']);
 
-    const apply = await api('POST', '/api/transactions/inventory-backfill', { dryRun: false, limit: 10 });
+    const apply = await api('POST', '/api/transactions/inventory-backfill', { dryRun: false, limit: 10 }, superAdminToken);
     expect(apply.response.status).toBe(200);
     expect(apply.json.summary.applied).toBe(2);
     expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
@@ -376,7 +436,7 @@ describe('transaction inventory auto-sync', () => {
       'backfill:bf_sale:header:0',
     ]));
 
-    const secondApply = await api('POST', '/api/transactions/inventory-backfill', { dryRun: false, limit: 10 });
+    const secondApply = await api('POST', '/api/transactions/inventory-backfill', { dryRun: false, limit: 10 }, superAdminToken);
     expect(secondApply.response.status).toBe(200);
     expect(secondApply.json.summary.applied).toBe(0);
     expect((await first<{ count: number }>(
@@ -405,6 +465,268 @@ describe('transaction inventory auto-sync', () => {
     expect(crossWarehouse.response.status).toBe(400);
     expect(crossWarehouse.json.error).toBe('Destination warehouse not found');
     expect((await first<{ count: number }>('SELECT COUNT(*) AS count FROM transactions'))?.count).toBe(0);
+  });
+});
+
+describe('warehouse inventory movement validation', () => {
+  it('creates one warehouse-level bucket for repeated Receive with null zone', async () => {
+    const firstReceive = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 4,
+      to_warehouse_id: 'wh_source',
+    });
+    expect(firstReceive.response.status).toBe(201);
+    expect(await inventoryBucketCount('wh_source', 'part_router', 'Good', null)).toBe(1);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(4);
+
+    const secondReceive = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 6,
+      to_warehouse_id: 'wh_source',
+    });
+    expect(secondReceive.response.status).toBe(201);
+    expect(await inventoryBucketCount('wh_source', 'part_router', 'Good', null)).toBe(1);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(10);
+  });
+
+  it('keeps separate buckets for different zones', async () => {
+    const zoneA = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 3,
+      to_warehouse_id: 'wh_source',
+      to_zone_id: 'zone_a',
+    });
+    const zoneB = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 5,
+      to_warehouse_id: 'wh_source',
+      to_zone_id: 'zone_b',
+    });
+
+    expect(zoneA.response.status).toBe(201);
+    expect(zoneB.response.status).toBe(201);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_a')).toBe(3);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_b')).toBe(5);
+    expect(await inventoryBucketCount('wh_source', 'part_router')).toBe(2);
+  });
+
+  it('keeps warehouse-level and zone buckets separate', async () => {
+    await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 2,
+      to_warehouse_id: 'wh_source',
+    });
+    await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 7,
+      to_warehouse_id: 'wh_source',
+      to_zone_id: 'zone_a',
+    });
+
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_a')).toBe(7);
+    expect(await inventoryBucketCount('wh_source', 'part_router')).toBe(2);
+  });
+
+  it('ships stock when source has enough quantity', async () => {
+    await seedInventory('inv_manual_ship_ok', 'wh_source', null, 'part_router', 5);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Ship',
+      part_id: 'part_router',
+      quantity: 3,
+      from_warehouse_id: 'wh_source',
+    });
+
+    expect(result.response.status).toBe(201);
+    expect(result.json.success).toBe(true);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+    expect(await movementCount()).toBe(1);
+    expect((await first<{ action: string }>(
+      "SELECT action FROM audit_log WHERE action = 'INVENTORY_MOVE'",
+    ))?.action).toBe('INVENTORY_MOVE');
+  });
+
+  it('rejects Ship when stock is missing and writes no partial data', async () => {
+    await seedInventory('inv_manual_ship_low', 'wh_source', null, 'part_router', 2);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Ship',
+      part_id: 'part_router',
+      quantity: 3,
+      from_warehouse_id: 'wh_source',
+    });
+
+    expect(result.response.status).toBe(409);
+    expect(result.json.code).toBe('INSUFFICIENT_STOCK');
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+    expect(await movementCount()).toBe(0);
+  });
+
+  it('transfers stock when source has enough quantity', async () => {
+    await seedInventory('inv_manual_transfer_ok', 'wh_source', null, 'part_router', 5);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 4,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_dest',
+    });
+
+    expect(result.response.status).toBe(201);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(1);
+    expect(await inventoryQty('wh_dest', 'part_router')).toBe(4);
+    expect((await first<{ movement_type: string }>(
+      'SELECT movement_type FROM inventory_movements',
+    ))?.movement_type).toBe('Transfer');
+  });
+
+  it('transfers from a warehouse-level bucket into a specific zone without duplicating buckets', async () => {
+    await seedInventory('inv_transfer_zone_source', 'wh_source', null, 'part_router', 8);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 5,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_dest',
+      to_zone_id: 'zone_dest',
+    });
+
+    expect(result.response.status).toBe(201);
+    expect(await inventoryBucketCount('wh_source', 'part_router', 'Good', null)).toBe(1);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(3);
+    expect(await inventoryBucketCount('wh_dest', 'part_router', 'Good', 'zone_dest')).toBe(1);
+    expect(await inventoryQty('wh_dest', 'part_router', 'Good', 'zone_dest')).toBe(5);
+  });
+
+  it('rejects Transfer when source stock is insufficient', async () => {
+    await seedInventory('inv_manual_transfer_low', 'wh_source', null, 'part_router', 2);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 3,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_dest',
+    });
+
+    expect(result.response.status).toBe(409);
+    expect(result.json.code).toBe('INSUFFICIENT_STOCK');
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+    expect(await inventoryQty('wh_dest', 'part_router')).toBe(0);
+    expect(await movementCount()).toBe(0);
+  });
+
+  it('rejects outbound Adjust when it would make stock negative', async () => {
+    await seedInventory('inv_manual_adjust_low', 'wh_source', null, 'part_router', 2);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Adjust',
+      part_id: 'part_router',
+      quantity: 3,
+      from_warehouse_id: 'wh_source',
+    });
+
+    expect(result.response.status).toBe(409);
+    expect(result.json.code).toBe('INSUFFICIENT_STOCK');
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(2);
+    expect(await movementCount()).toBe(0);
+  });
+
+  it('blocks cross-tenant warehouse references for manual movement', async () => {
+    await seedInventory('inv_manual_cross_scope', 'wh_source', null, 'part_router', 5);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 1,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_other',
+    });
+
+    expect(result.response.status).toBe(400);
+    expect(result.json.code).toBe('WAREHOUSE_NOT_FOUND');
+    expect(result.json.error).toBe('Destination warehouse not found');
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(5);
+    expect(await movementCount()).toBe(0);
+  });
+
+  it('allows another company to use an equivalent bucket key without conflict', async () => {
+    await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 4,
+      to_warehouse_id: 'wh_source',
+    });
+    const otherCompany = await api('POST', '/api/warehouses/inventory/move?company_id=company_other', {
+      movement_type: 'Receive',
+      part_id: 'part_other',
+      quantity: 9,
+      to_warehouse_id: 'wh_other',
+    }, superAdminToken);
+
+    expect(otherCompany.response.status).toBe(201);
+    expect((await first<{ quantity: number }>(`
+      SELECT quantity
+      FROM inventory
+      WHERE tenant_id = 'tenant_other'
+        AND company_id = 'company_other'
+        AND warehouse_id = 'wh_other'
+        AND part_id = 'part_other'
+        AND condition = 'Good'
+        AND zone_id IS NULL
+    `))?.quantity).toBe(9);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(4);
+  });
+
+  it('rejects cross-tenant parts for manual movement', async () => {
+    const result = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_other',
+      quantity: 1,
+      to_warehouse_id: 'wh_source',
+    });
+
+    expect(result.response.status).toBe(400);
+    expect(result.json.code).toBe('PART_NOT_FOUND');
+    expect(await inventoryBucketCount('wh_source', 'part_other')).toBe(0);
+    expect(await movementCount()).toBe(0);
+  });
+
+  it('does not let a later Receive mask an earlier over-Ship in the same batch', async () => {
+    await expect(applyInventoryMovements(testEnv.DB, [
+      {
+        movementType: 'Ship',
+        partId: 'part_router',
+        quantity: 5,
+        fromWarehouseId: 'wh_source',
+        syncSource: 'manual',
+      },
+      {
+        movementType: 'Receive',
+        partId: 'part_router',
+        quantity: 5,
+        toWarehouseId: 'wh_source',
+        syncSource: 'manual',
+      },
+    ], {
+      tenantId: 'tenant_cirtell_default',
+      companyId: 'company_cirtell_default',
+    })).rejects.toMatchObject({
+      code: 'INSUFFICIENT_STOCK',
+      status: 409,
+    });
+
+    expect(await movementCount()).toBe(0);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(0);
   });
 });
 
