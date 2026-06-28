@@ -42,6 +42,12 @@ function roleText(value: unknown): string | null {
   return ['Admin', 'User', 'Viewer'].includes(normalized) ? normalized : null;
 }
 
+function emailText(value: unknown): string | null {
+  const normalized = text(value)?.toLowerCase();
+  if (!normalized) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
+}
+
 function booleanFlag(value: unknown): number | null {
   if (value === true || value === 1 || value === '1') return 1;
   if (value === false || value === 0 || value === '0') return 0;
@@ -66,6 +72,12 @@ function scopeTenantCondition(user: User, alias = '') {
   const prefix = alias ? `${alias}.` : '';
   if (isSuperAdmin(user)) return { clause: '1=1', params: [] as string[] };
   return { clause: `${prefix}tenant_id = ?`, params: [user.tenant_id || ''] };
+}
+
+function invitationUrl(baseUrl: string | undefined, token: string, email: string) {
+  const origin = (baseUrl || '').replace(/\/+$/, '');
+  const path = `/login?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+  return origin ? `${origin}${path}` : path;
 }
 
 async function safeHandle<T>(fn: () => Promise<T>, c: any) {
@@ -172,6 +184,166 @@ adminRoutes.get('/users', async (c) => safeHandle(async () => {
   `).bind(...params).all();
 
   return c.json({ success: true, users: results || [] });
+}, c));
+
+adminRoutes.get('/invitations', async (c) => safeHandle(async () => {
+  const user = c.get('user');
+  const params: string[] = [];
+  let where = 'WHERE 1=1';
+
+  if (!isSuperAdmin(user)) {
+    where += ' AND i.tenant_id = ?';
+    params.push(user.tenant_id || '');
+  }
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      i.id,
+      i.email,
+      i.name,
+      i.role,
+      i.status,
+      i.expires_at,
+      i.accepted_at,
+      i.created_at,
+      i.tenant_id,
+      i.company_id,
+      t.name AS tenant_name,
+      c.name AS company_name,
+      u.name AS invited_by_name
+    FROM user_invitations i
+    LEFT JOIN tenants t ON t.id = i.tenant_id
+    LEFT JOIN companies c ON c.id = i.company_id
+    LEFT JOIN users u ON u.id = i.invited_by
+    ${where}
+    ORDER BY i.created_at DESC
+    LIMIT 200
+  `).bind(...params).all();
+
+  return c.json({ success: true, invitations: results || [] });
+}, c));
+
+adminRoutes.post('/users/invite', async (c) => safeHandle(async () => {
+  const adminUser = c.get('user');
+  const body = await c.req.json();
+  const email = emailText(body.email);
+  let role: 'Admin' | 'User' | 'Viewer' = 'User';
+  if (body.role !== undefined) {
+    const parsedRole = roleText(body.role);
+    if (!parsedRole) return c.json({ success: false, error: 'role must be Admin, User, or Viewer' }, 400);
+    role = parsedRole as 'Admin' | 'User' | 'Viewer';
+  }
+  const name = text(body.name) || (email ? email.split('@')[0] : '');
+  const requestedCompanyId = text(body.company_id) || adminUser.company_id;
+
+  if (!email) {
+    return c.json({ success: false, error: 'A valid email is required' }, 400);
+  }
+  if (!requestedCompanyId) {
+    return c.json({ success: false, error: 'A company is required to invite a user' }, 400);
+  }
+
+  const company = await c.env.DB.prepare(`
+    SELECT c.id, c.tenant_id, c.name, t.name AS tenant_name
+    FROM companies c
+    LEFT JOIN tenants t ON t.id = c.tenant_id
+    WHERE c.id = ?
+  `).bind(requestedCompanyId).first<{ id: string; tenant_id: string; name: string; tenant_name: string | null }>();
+  if (!company) return c.json({ success: false, error: 'Company not found' }, 400);
+  if (!isSuperAdmin(adminUser) && company.tenant_id !== adminUser.tenant_id) {
+    return c.json({ success: false, error: 'Company not found' }, 404);
+  }
+
+  const existing = await c.env.DB.prepare(`
+    SELECT id, status
+    FROM users
+    WHERE LOWER(email) = LOWER(?)
+  `).bind(email).first<{ id: string; status: string }>();
+  if (existing) {
+    return c.json({
+      success: false,
+      error: existing.status === 'deleted' ? 'Deleted user email cannot be invited' : 'User already exists',
+      code: 'USER_ALREADY_EXISTS',
+    }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const userId = `user_${crypto.randomUUID()}`;
+  const assignmentId = `assignment_${crypto.randomUUID()}`;
+  const invitationId = `invite_${crypto.randomUUID()}`;
+  const token = crypto.randomUUID().replace(/-/g, '');
+  const inviteUrl = invitationUrl(c.env.FRONTEND_URL || c.req.header('Origin'), token, email);
+
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        INSERT INTO users (
+          id, email, name, role, status, tenant_id, company_id,
+          is_super_admin, session_version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'active', ?, ?, 0, 0, ?, ?)
+      `).bind(userId, email, name, role, company.tenant_id, company.id, now, now),
+      c.env.DB.prepare(`
+        INSERT INTO user_company_assignments (id, user_id, tenant_id, company_id, role, assigned_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(assignmentId, userId, company.tenant_id, company.id, role, now),
+      c.env.DB.prepare(`
+        INSERT INTO user_invitations (
+          id, email, name, role, tenant_id, company_id,
+          invited_user_id, invited_by, token, status, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      `).bind(invitationId, email, name, role, company.tenant_id, company.id, userId, adminUser.id, token, expiresAt, now, now),
+    ]);
+  } catch (err: any) {
+    const message = String(err?.message || err);
+    if (message.includes('UNIQUE') || message.includes('constraint')) {
+      return c.json({ success: false, error: 'User or invitation already exists', code: 'INVITE_CONFLICT' }, 409);
+    }
+    throw err;
+  }
+
+  await logAudit(
+    c.env.DB,
+    adminUser.id,
+    'INVITE_USER',
+    'user_invitations',
+    invitationId,
+    JSON.stringify({
+      targetUserId: userId,
+      email,
+      role,
+      tenantId: company.tenant_id,
+      companyId: company.id,
+      expiresAt,
+    }),
+    company.tenant_id,
+    company.id,
+  );
+
+  return c.json({
+    success: true,
+    user: {
+      id: userId,
+      email,
+      name,
+      role,
+      status: 'active',
+      tenant_id: company.tenant_id,
+      company_id: company.id,
+      tenant_name: company.tenant_name,
+      company_name: company.name,
+      is_super_admin: 0,
+      company_count: 1,
+    },
+    invitation: {
+      id: invitationId,
+      email,
+      role,
+      status: 'pending',
+      expires_at: expiresAt,
+      invite_url: inviteUrl,
+    },
+  }, 201);
 }, c));
 
 adminRoutes.patch('/users/:id', async (c) => safeHandle(async () => {

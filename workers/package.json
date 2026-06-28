@@ -9,6 +9,8 @@
     "db:create": "wrangler d1 create cirtell-db",
     "db:migrate:local": "wrangler d1 migrations apply cirtell-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply cirtell-db --remote",
+    "db:seed:demo:local": "wrangler d1 execute cirtell-db --local --file ./seeds/cirtell_demo_dataset.sql",
+    "db:seed:demo:remote": "wrangler d1 execute cirtell-db --remote --file ./seeds/cirtell_demo_dataset.sql",
     "test": "vitest run",
     "test:watch": "vitest"
   },

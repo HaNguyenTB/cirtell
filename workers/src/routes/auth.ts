@@ -193,12 +193,22 @@ authRoutes.post('/validate', async (c) => {
       return c.json({ error: 'Access Denied', message: `Account ${dbUser.status}.` }, 403);
     }
 
+    const now = new Date().toISOString();
+
     // Update last login
     await c.env.DB.prepare(`
       UPDATE users
       SET last_login = ?, google_sub = COALESCE(google_sub, ?)
       WHERE id = ?
-    `).bind(new Date().toISOString(), tokenUser.id, dbUser.id).run();
+    `).bind(now, tokenUser.id, dbUser.id).run();
+
+    await c.env.DB.prepare(`
+      UPDATE user_invitations
+      SET status = 'accepted', accepted_at = ?, updated_at = ?
+      WHERE LOWER(email) = LOWER(?)
+        AND status = 'pending'
+        AND (invited_user_id IS NULL OR invited_user_id = ?)
+    `).bind(now, now, dbUser.email, dbUser.id).run();
 
     await logAudit(c.env.DB, dbUser.id, 'LOGIN', 'users', dbUser.id);
     const context = await loadTenantContext(c.env.DB, dbUser);

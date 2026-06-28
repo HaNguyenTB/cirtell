@@ -7,11 +7,13 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   Crown,
   Database,
   Globe,
   LayoutDashboard,
   Loader2,
+  Mail,
   Pencil,
   Plus,
   RefreshCw,
@@ -54,6 +56,22 @@ interface AdminUser {
   company_name?: string | null;
   is_super_admin?: number | boolean | null;
   company_count?: number | null;
+}
+
+interface UserInvitation {
+  id: string;
+  email: string;
+  name?: string | null;
+  role: 'Admin' | 'User' | 'Viewer';
+  status: 'pending' | 'accepted' | 'cancelled' | 'expired';
+  expires_at?: string | null;
+  accepted_at?: string | null;
+  created_at?: string | null;
+  tenant_id?: string | null;
+  company_id?: string | null;
+  tenant_name?: string | null;
+  company_name?: string | null;
+  invited_by_name?: string | null;
 }
 
 interface Tenant extends TenantRecord {
@@ -102,6 +120,13 @@ interface UserForm {
   status: 'active' | 'suspended' | 'deleted';
   company_id: string;
   is_super_admin: boolean;
+}
+
+interface InviteForm {
+  email: string;
+  name: string;
+  role: 'Admin' | 'User' | 'Viewer';
+  company_id: string;
 }
 
 const viewMeta: Record<AdminView, { path: string; label: string; icon: LucideIcon; description: string }> = {
@@ -227,6 +252,7 @@ export function AdministrationPage() {
 
   const [stats, setStats] = useState<AdminStats>(emptyStats);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [invitations, setInvitations] = useState<UserInvitation[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [companies, setCompanies] = useState<CompanyRecord[]>([]);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
@@ -239,15 +265,17 @@ export function AdministrationPage() {
     else setLoading(true);
     setError('');
     try {
-      const [statsResult, usersResult, tenantsResult, companiesResult, auditResult] = await Promise.all([
+      const [statsResult, usersResult, invitationsResult, tenantsResult, companiesResult, auditResult] = await Promise.all([
         apiRequest<{ stats: AdminStats }>('/api/admin/stats'),
         apiRequest<{ users: AdminUser[] }>('/api/admin/users'),
+        apiRequest<{ invitations: UserInvitation[] }>('/api/admin/invitations'),
         apiRequest<{ tenants: Tenant[] }>('/api/admin/tenants'),
         apiRequest<{ companies: CompanyRecord[] }>('/api/admin/companies'),
         apiRequest<{ audit: AuditEvent[] }>('/api/admin/audit-log'),
       ]);
       setStats(statsResult.stats || emptyStats);
       setUsers(usersResult.users || []);
+      setInvitations(invitationsResult.invitations || []);
       setTenants(tenantsResult.tenants || []);
       setCompanies(companiesResult.companies || []);
       setAudit(auditResult.audit || []);
@@ -321,7 +349,7 @@ export function AdministrationPage() {
       ) : (
         <>
           {view === 'overview' && <AdminOverview stats={stats} users={users} companies={companies} audit={audit} onNavigate={(next) => navigate(viewMeta[next].path)} />}
-          {view === 'users' && <AdminUsers users={users} companies={companies} canManage={canManageUsers} onChanged={refresh} />}
+          {view === 'users' && <AdminUsers users={users} invitations={invitations} companies={companies} canManage={canManageUsers} onChanged={refresh} />}
           {view === 'groups' && <AdminGroups tenants={tenants} companies={companies} canManage={canManageGroups} onChanged={refresh} />}
           {view === 'companies' && <AdminCompanies companies={companies} tenants={tenants} canManage={canManageUsers} onChanged={refresh} />}
           {view === 'audit' && <AdminAudit audit={audit} />}
@@ -407,11 +435,13 @@ function AdminOverview({
 
 function AdminUsers({
   users,
+  invitations,
   companies,
   canManage,
   onChanged,
 }: {
   users: AdminUser[];
+  invitations: UserInvitation[];
   companies: CompanyRecord[];
   canManage: boolean;
   onChanged: () => void;
@@ -420,6 +450,8 @@ function AdminUsers({
   const [role, setRole] = useState('all');
   const [status, setStatus] = useState('all');
   const [editing, setEditing] = useState<AdminUser | null>(null);
+  const [showInvite, setShowInvite] = useState(false);
+  const pendingInvitations = invitations.filter((item) => item.status === 'pending');
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -433,13 +465,24 @@ function AdminUsers({
 
   return (
     <div className="space-y-4">
-      <SectionHeader title="Users" subtitle="Manage accounts, roles, status, and primary company" />
+      <SectionHeader
+        title="Users"
+        subtitle="Manage accounts, invites, roles, status, and primary company"
+        action={canManage ? (
+          <button type="button" onClick={() => setShowInvite(true)} className="btn-primary">
+            <Mail className="h-4 w-4" />
+            Invite User
+          </button>
+        ) : null}
+      />
       <div className="grid gap-4 md:grid-cols-4">
         <MetricCard icon={Users} label="Total" value={users.length} detail="Visible users" />
         <MetricCard icon={Check} label="Active" value={users.filter((item) => item.status === 'active').length} detail="Can sign in" />
         <MetricCard icon={Shield} label="Admins" value={users.filter((item) => item.role === 'Admin' || isTruthy(item.is_super_admin)).length} detail="Elevated access" />
-        <MetricCard icon={Building2} label="Assigned" value={users.filter((item) => item.company_id).length} detail="Primary company set" />
+        <MetricCard icon={Mail} label="Pending Invites" value={pendingInvitations.length} detail="Waiting for first login" />
       </div>
+
+      <PendingInvitations invitations={pendingInvitations} />
 
       <div className="rounded-apple-lg border border-gray-100 bg-white p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -507,6 +550,42 @@ function AdminUsers({
       {editing && (
         <UserEditModal user={editing} companies={companies} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />
       )}
+      {showInvite && (
+        <InviteUserModal companies={companies} onClose={() => setShowInvite(false)} onInvited={onChanged} />
+      )}
+    </div>
+  );
+}
+
+function PendingInvitations({ invitations }: { invitations: UserInvitation[] }) {
+  if (invitations.length === 0) return null;
+  return (
+    <div className="rounded-apple-lg border border-signal-teal/15 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="text-caption font-semibold text-gray-900">Pending invitations</h3>
+          <p className="text-micro text-gray-500">Invited users become active when they sign in with the same Google email.</p>
+        </div>
+        <span className="rounded-apple bg-signal-teal/10 px-2.5 py-1 text-micro font-semibold text-signal-teal">
+          {invitations.length} pending
+        </span>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {invitations.slice(0, 6).map((item) => (
+          <div key={item.id} className="rounded-apple border border-gray-100 bg-gray-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-caption font-semibold text-gray-900">{item.name || item.email}</p>
+                <p className="truncate text-micro text-gray-500">{item.email}</p>
+              </div>
+              <span className="rounded-apple bg-white px-2 py-1 text-micro font-semibold text-signal-teal">{item.role}</span>
+            </div>
+            <p className="mt-2 truncate text-micro text-gray-500">
+              {item.company_name || 'Company'} - expires {formatDate(item.expires_at)}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -787,6 +866,119 @@ function AdminAudit({ audit }: { audit: AuditEvent[] }) {
         <AuditList audit={audit} />
       </div>
     </div>
+  );
+}
+
+function InviteUserModal({
+  companies,
+  onClose,
+  onInvited,
+}: {
+  companies: CompanyRecord[];
+  onClose: () => void;
+  onInvited: () => void;
+}) {
+  const [form, setForm] = useState<InviteForm>({
+    email: '',
+    name: '',
+    role: 'User',
+    company_id: companies[0]?.id || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<{
+    invitation?: { invite_url?: string; expires_at?: string };
+    user?: AdminUser;
+  } | null>(null);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setCopied(false);
+    try {
+      const response = await apiRequest<{
+        invitation?: { invite_url?: string; expires_at?: string };
+        user?: AdminUser;
+      }>('/api/admin/users/invite', {
+        method: 'POST',
+        body: {
+          ...form,
+          name: form.name.trim() || undefined,
+        },
+      });
+      setResult(response);
+      onInvited();
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to invite user'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const copyInvite = async () => {
+    const url = result?.invitation?.invite_url;
+    if (!url) return;
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+  };
+
+  return (
+    <Modal title="Invite User" onClose={onClose}>
+      <form onSubmit={(event) => void submit(event)} className="space-y-4">
+        {error && <FormError message={error} />}
+        <Field label="Email">
+          <input
+            required
+            type="email"
+            value={form.email}
+            onChange={(event) => setForm({ ...form, email: event.target.value })}
+            className="input-base"
+            placeholder="teammate@example.com"
+          />
+        </Field>
+        <Field label="Name">
+          <input
+            value={form.name}
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
+            className="input-base"
+            placeholder="Optional display name"
+          />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Role">
+            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as InviteForm['role'] })} className="input-base">
+              <option value="Admin">Admin</option>
+              <option value="User">User</option>
+              <option value="Viewer">Viewer</option>
+            </select>
+          </Field>
+          <Field label="Primary Company">
+            <select required value={form.company_id} onChange={(event) => setForm({ ...form, company_id: event.target.value })} className="input-base">
+              <option value="">Select company...</option>
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>{company.name} ({company.code})</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        {result?.invitation?.invite_url && (
+          <div className="rounded-apple-md border border-signal-teal/20 bg-signal-teal/5 p-3">
+            <p className="mb-2 text-caption font-semibold text-gray-900">Invite link</p>
+            <div className="flex gap-2">
+              <input readOnly value={result.invitation.invite_url} className="input-base bg-white text-micro" />
+              <button type="button" onClick={() => void copyInvite()} className="btn-secondary shrink-0">
+                <Copy className="h-4 w-4" />
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <p className="mt-2 text-micro text-gray-500">Expires {formatDate(result.invitation.expires_at)}.</p>
+          </div>
+        )}
+        <ModalActions saving={saving} onClose={onClose} submitLabel={result ? 'Invite Another' : 'Send Invite'} />
+      </form>
+    </Modal>
   );
 }
 
