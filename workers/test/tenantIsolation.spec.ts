@@ -306,12 +306,28 @@ describe('tenant and company isolation', () => {
   });
 
   it('blocks tenant B PO download and limits audit logs to Admin A tenant', async () => {
+    const beforePoB = await first<{ file_name: string; file_hex: string }>(`
+      SELECT file_name, hex(file_data) AS file_hex
+      FROM transaction_po_files
+      WHERE transaction_id = ?
+    `, 'tx_b_existing');
+
     const download = await apiRequest('GET', '/api/transactions/tx_b_existing/po-download', {
       token: seeded.tokens.adminA,
     });
     expect(download.response.status).toBe(404);
     expect(download.response.headers.get('Content-Type')).toContain('application/json');
+    const bodyText = await download.response.clone().text();
+    expect(bodyText).not.toContain('po-b.pdf');
+    expect(bodyText).not.toContain('PO-B');
     expectNoTenantBText(download.json);
+
+    const afterPoB = await first<{ file_name: string; file_hex: string }>(`
+      SELECT file_name, hex(file_data) AS file_hex
+      FROM transaction_po_files
+      WHERE transaction_id = ?
+    `, 'tx_b_existing');
+    expect(afterPoB).toEqual(beforePoB);
 
     const audit = await apiRequest('GET', '/api/admin/audit-log?tenant_id=tenant_b&company_id=company_b1', {
       token: seeded.tokens.adminA,

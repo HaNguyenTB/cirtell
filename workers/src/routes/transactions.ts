@@ -205,6 +205,8 @@ function fileExtension(fileName: string): string {
 function isAllowedPoContentType(contentType: string, fileName: string): boolean {
   const normalized = contentType.toLowerCase();
   if (ALLOWED_PO_CONTENT_TYPES.has(normalized)) return true;
+  // Some browsers and test adapters send uploaded Office/PDF files as octet-stream.
+  // Only allow that fallback when the sanitized filename has an approved extension.
   return normalized === 'application/octet-stream' && ALLOWED_PO_EXTENSIONS.has(fileExtension(fileName));
 }
 
@@ -1335,9 +1337,19 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const id = c.req.param('id')!;
-    const existing = await c.env.DB.prepare(`SELECT id FROM transactions WHERE id = ? AND ${scopeWhere.clause}`)
+    const existing = await c.env.DB.prepare(`
+      SELECT id, tenant_id, company_id, po_file_name, po_file_key
+      FROM transactions
+      WHERE id = ? AND ${scopeWhere.clause}
+    `)
       .bind(id, ...scopeWhere.params)
-      .first<{ id: string }>();
+      .first<{
+        id: string;
+        tenant_id: string | null;
+        company_id: string | null;
+        po_file_name: string | null;
+        po_file_key: string | null;
+      }>();
     if (!existing) return c.json({ success: false, error: 'Transaction not found', code: 'TRANSACTION_NOT_FOUND' }, 404);
 
     const existingFile = await c.env.DB.prepare(
@@ -1387,8 +1399,8 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
         sizeBytes: file.size,
         replacedExistingFile,
       }),
-      scope.tenantId,
-      scope.companyId,
+      existing.tenant_id ?? scope.tenantId,
+      existing.company_id ?? scope.companyId,
     );
     return c.json({
       success: true,

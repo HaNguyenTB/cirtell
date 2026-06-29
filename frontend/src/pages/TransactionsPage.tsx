@@ -1048,14 +1048,35 @@ function TransactionsTable({
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-center">
                       {transaction.poFileKey ? (
-                        <button
-                          onClick={() => onPODownload(transaction)}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:text-signal-teal/80"
-                          title={`Download ${transaction.poFileName || 'PO'}`}
-                        >
-                          <FileText className="h-3.5 w-3.5" />
-                          View
-                        </button>
+                        <div className="inline-flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => onPODownload(transaction)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:text-signal-teal/80"
+                            title={`Download ${transaction.poFileName || 'PO'}`}
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            View
+                          </button>
+                          {canEdit && (
+                            <label className="inline-flex cursor-pointer items-center rounded p-1 text-gray-400 transition-colors hover:bg-signal-teal/15 hover:text-signal-teal" title="Replace PO">
+                              {uploadingPO === transaction.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="h-3.5 w-3.5" />
+                              )}
+                              <input
+                                type="file"
+                                className="hidden"
+                                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  if (file) onPOUpload(transaction.id, file);
+                                  event.target.value = '';
+                                }}
+                              />
+                            </label>
+                          )}
+                        </div>
                       ) : canEdit ? (
                         <label className="inline-flex cursor-pointer items-center gap-1 px-2 py-1 text-micro font-medium text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300" title="Upload PO">
                           {uploadingPO === transaction.id ? (
