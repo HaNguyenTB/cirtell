@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useGoogleSSO } from '../hooks/useGoogleSSO';
-import { AlertCircle, Loader2, Moon, Recycle, Sun } from 'lucide-react';
+import { AlertCircle, Loader2, Moon, Recycle, ShieldCheck, Sun } from 'lucide-react';
 
 export function LoginPage() {
   const { isAuthenticated } = useAuthStore();
@@ -17,35 +17,56 @@ export function LoginPage() {
     window.localStorage.setItem('cirtell-login-theme', nextMode ? 'light' : 'dark');
   };
 
-  if (isAuthenticated) {
-    return <Navigate to="/" replace />;
-  }
+  if (isAuthenticated) return <Navigate to="/" replace />;
+
+  const foreground = isLightMode ? 'text-gray-900' : 'text-white';
+  const secondary = isLightMode ? 'text-gray-500' : 'text-white/50';
+  const muted = isLightMode ? 'text-gray-400' : 'text-white/35';
 
   return (
-    <div className="min-h-screen flex flex-col lg:flex-row overflow-hidden bg-midnight">
-      <div className="hidden lg:flex lg:w-[58%] relative flex-col justify-end overflow-hidden bg-[#0c0c0c]">
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(37,149,123,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(37,149,123,0.08)_1px,transparent_1px)] bg-[size:56px_56px]" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/50" />
+    <main className="grid min-h-[100svh] overflow-hidden bg-[#0c0c0c] lg:grid-cols-[minmax(0,1.15fr)_minmax(430px,0.85fr)]">
+      <section className="relative hidden min-h-[100svh] overflow-hidden bg-[#0c0c0c] px-10 py-9 lg:flex lg:flex-col lg:justify-between xl:px-14 xl:py-12">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(37,149,123,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(37,149,123,0.07)_1px,transparent_1px)] bg-[size:56px_56px]" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/70" />
 
-        <div className="relative z-10 p-8 pb-12 max-w-xl">
-          <div className="w-12 h-12 rounded-apple-xl bg-signal-teal/15 border border-signal-teal/20 flex items-center justify-center mb-8">
-            <Recycle className="text-verified-green" size={24} />
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-apple-md bg-deep-teal shadow-lg shadow-black/20">
+            <Recycle className="text-verified-green" size={20} />
           </div>
-          <h2 className="font-display text-[40px] font-light leading-[1.15] text-white/85 tracking-tight">
-            Smarter <span className="font-semibold text-white">inventory</span>,
-            <br />
-            powered by <span className="text-signal-teal font-medium">circular intelligence</span>
+          <span className="font-display text-xl font-semibold text-white">Cirtell</span>
+        </div>
+
+        <div className="relative z-10 max-w-[620px] pb-2">
+          <div className="mb-6 flex items-center gap-3 text-micro font-semibold uppercase text-verified-green/80">
+            <span className="h-px w-8 bg-verified-green/60" />
+            Circular inventory intelligence
+          </div>
+          <h2 className="max-w-[590px] font-display text-[44px] font-light leading-[1.08] text-white/85 xl:text-[52px]">
+            See where every part goes,
+            <span className="font-semibold text-white"> and what it saves.</span>
           </h2>
-          <p className="mt-4 text-[15px] leading-relaxed text-white/40 max-w-sm">
-            Track materials, reduce waste, and unlock the full value of your circular economy operations.
+          <p className="mt-6 max-w-lg text-[15px] leading-7 text-white/45">
+            One operational view for parts, transactions, warehouse stock, projects, and carbon impact.
           </p>
         </div>
-      </div>
+      </section>
 
-      <div
-        className={'relative flex min-h-screen flex-1 flex-col transition-colors duration-300 lg:w-[42%] ' +
+      <section
+        className={'relative flex min-h-[100svh] flex-col overflow-hidden border-white/5 transition-colors duration-300 lg:border-l ' +
           (isLightMode ? 'bg-white' : 'bg-[#111111]')}
       >
+        <div
+          className={'pointer-events-none absolute inset-0 bg-[linear-gradient(currentColor_1px,transparent_1px),linear-gradient(90deg,currentColor_1px,transparent_1px)] bg-[size:64px_64px] transition-colors ' +
+            (isLightMode ? 'text-gray-900/[0.025]' : 'text-white/[0.018]')}
+        />
+
+        <div className="absolute left-6 top-5 z-20 flex items-center gap-2.5 lg:hidden">
+          <div className="flex h-9 w-9 items-center justify-center rounded-apple-md bg-deep-teal">
+            <Recycle className="text-verified-green" size={18} />
+          </div>
+          <span className={'font-display text-lg font-semibold ' + foreground}>Cirtell</span>
+        </div>
+
         <button
           type="button"
           onClick={toggleLoginTheme}
@@ -59,58 +80,54 @@ export function LoginPage() {
           {isLightMode ? <Moon size={16} aria-hidden="true" /> : <Sun size={16} aria-hidden="true" />}
         </button>
 
-        <div className="flex flex-1 flex-col justify-center px-6 lg:px-12 xl:px-16">
-          <div className="w-full max-w-[400px] mx-auto">
-            <div className="mb-8">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-10 h-10 rounded-apple-md bg-deep-teal flex items-center justify-center">
-                  <Recycle className="text-verified-green" size={20} />
-                </div>
-                <span className={'font-display text-xl font-semibold ' + (isLightMode ? 'text-gray-900' : 'text-white')}>Cirtell</span>
-              </div>
-              <h1 className={'mb-2 text-[28px] font-semibold tracking-tight ' + (isLightMode ? 'text-gray-900' : 'text-white')}>
-                Welcome back
-              </h1>
-              <p className={'text-caption leading-relaxed ' + (isLightMode ? 'text-gray-500' : 'text-white/45')}>
-                Sign in to access your circular economy dashboard and inventory insights.
+        <div className="relative z-10 flex flex-1 items-center px-6 py-24 sm:px-10 lg:px-12 xl:px-16">
+          <div className="mx-auto w-full max-w-[420px]">
+            <header className="mb-9">
+              <p className="mb-3 text-micro font-semibold uppercase text-signal-teal">Secure workspace access</p>
+              <h1 className={'font-display text-[32px] font-semibold leading-tight ' + foreground}>Welcome back</h1>
+              <p className={'mt-3 max-w-sm text-caption leading-6 ' + secondary}>
+                Sign in to continue to your Cirtell workspace.
               </p>
-            </div>
+            </header>
 
             {error && (
               <div className={'mb-5 flex items-start gap-2.5 rounded-apple-md border px-4 py-3 text-caption ' +
                 (isLightMode ? 'border-red-200 bg-red-50 text-red-700' : 'border-red-500/20 bg-red-500/10 text-red-300')}
               >
-                <AlertCircle size={16} className="shrink-0 mt-0.5 opacity-70" />
+                <AlertCircle size={16} className="mt-0.5 shrink-0 opacity-70" />
                 <span>{error}</span>
               </div>
             )}
 
-            {!gsiReady && !error && (
-              <div className={'mb-5 flex items-center justify-center gap-2 text-caption ' + (isLightMode ? 'text-gray-500' : 'text-white/45')}>
-                <Loader2 size={16} className="animate-spin" />
-                Preparing sign-in...
+            <div className={'rounded-apple-lg border p-5 shadow-sm transition-colors ' +
+              (isLightMode ? 'border-gray-200 bg-gray-50/80' : 'border-white/[0.09] bg-white/[0.045]')}
+            >
+              <div className="flex min-h-10 items-center justify-center">
+                {!gsiReady && !error && (
+                  <div className={'flex items-center gap-2 text-caption ' + secondary}>
+                    <Loader2 size={16} className="animate-spin" />
+                    Preparing sign-in...
+                  </div>
+                )}
+                <div className={gsiReady ? 'flex justify-center' : 'hidden'} ref={buttonContainerRef} />
               </div>
-            )}
-
-            <div className={'rounded-apple-lg border p-5 ' + (isLightMode ? 'border-gray-200 bg-gray-50' : 'border-white/[0.08] bg-white/[0.04]')}>
-              <div className="flex justify-center" ref={buttonContainerRef} />
             </div>
 
-            <div className={'mt-5 border-t pt-5 ' + (isLightMode ? 'border-gray-200' : 'border-white/[0.08]')}>
-              <p className={'text-center text-micro leading-relaxed ' + (isLightMode ? 'text-gray-400' : 'text-white/35')}>
-                By signing in, you agree to the processing of your Google account data.
-                Only authorized accounts may access this platform.
+            <div className={'mt-6 flex items-start gap-3 border-t pt-5 ' + (isLightMode ? 'border-gray-200' : 'border-white/[0.08]')}>
+              <ShieldCheck size={16} className="mt-0.5 shrink-0 text-signal-teal" aria-hidden="true" />
+              <p className={'text-micro leading-5 ' + muted}>
+                Access is limited to authorized Google accounts. Account data is processed only for authentication.
               </p>
             </div>
           </div>
         </div>
 
-        <footer className="py-5 px-6 lg:px-8 text-center">
-          <p className={'text-micro tracking-wide ' + (isLightMode ? 'text-gray-400' : 'text-white/35')}>
-            (c) {new Date().getFullYear()} Cirtell - Inventory Intelligence
+        <footer className="relative z-10 px-6 py-5 text-center">
+          <p className={'text-micro ' + muted}>
+            &copy; {new Date().getFullYear()} Cirtell. Inventory intelligence.
           </p>
         </footer>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }
