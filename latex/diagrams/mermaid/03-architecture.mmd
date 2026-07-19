@@ -1,0 +1,49 @@
+flowchart LR
+  subgraph Presentation[Presentation Layer]
+    Browser[Browser]
+    Pages[Cloudflare Pages<br/>static hosting]
+    React[React SPA<br/>Zustand auth store<br/>Recharts dashboard]
+  end
+
+  subgraph Application[Application/API Layer]
+    Workers[Cloudflare Workers]
+    Hono[Hono REST API]
+    Middleware[Auth RBAC Scope middleware<br/>CSRF CORS rate limit]
+  end
+
+  subgraph Data[Data Layer]
+    D1[Cloudflare D1]
+    Schema[SQL schema<br/>migrations]
+    Audit[audit_log]
+    Tables[business tables]
+  end
+
+  subgraph External[External Identity Provider]
+    Google[Google Identity]
+    Token[OIDC ID Token]
+    JWKS[JWKS]
+  end
+
+  Browser -->|load SPA| Pages
+  Pages --> React
+  React -->|REST Bearer token session scope| Workers
+  Workers --> Hono --> Middleware
+  Middleware -->|prepared SQL tenant company WHERE| D1
+  D1 --> Schema
+  D1 --> Tables
+  Middleware -->|write audit events| Audit
+  React -->|login| Google
+  Google --> Token
+  Workers -->|verify token| JWKS
+  JWKS --> Google
+
+  classDef layer fill:#f8fafc,stroke:#94a3b8,stroke-width:1.5px,color:#111827;
+  classDef presentation fill:#eff6ff,stroke:#2563eb,stroke-width:1.5px,color:#111827;
+  classDef application fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#111827;
+  classDef data fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.5px,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,stroke-width:1.5px,color:#111827;
+
+  class Browser,Pages,React presentation;
+  class Workers,Hono,Middleware application;
+  class D1,Schema,Audit,Tables data;
+  class Google,Token,JWKS external;

@@ -1,0 +1,50 @@
+erDiagram
+  USERS ||--o{ GHG_EMISSION_ENTRIES : creates
+  TRANSACTIONS ||--o{ GHG_EMISSION_ENTRIES : source_transaction
+  PARTS ||--o{ GHG_EMISSION_ENTRIES : factor_source
+
+  GHG_EMISSION_ENTRIES {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string created_by FK
+    int scope
+    string source_type
+    string transaction_id FK
+    string part_id FK
+    float activity_data
+    float emission_factor
+    float co2e_kg
+    string calculation_method
+    string source_movement_type
+  }
+
+  USERS {
+    string id PK
+    string email
+    string role
+    string status
+  }
+
+  TRANSACTIONS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    date date
+    string movement_type
+    string inventory_sync_status
+  }
+
+  PARTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string part_number
+    float emission_factor_kg
+  }
+
+  RATE_LIMITS {
+    string key PK
+    int request_count
+    int window_start
+  }

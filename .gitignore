@@ -11,3 +11,15 @@ test-results/
 playwright-report/
 blob-report/
 workers/.tmp/
+workers/.wrangler-scoped-uniqueness-check/
+latex/*.aux
+latex/*.bbl
+latex/*.bcf
+latex/*.blg
+latex/*.lof
+latex/*.log
+latex/*.lot
+latex/*.out
+latex/*.run.xml
+latex/*.toc
+latex/diagrams/.check/

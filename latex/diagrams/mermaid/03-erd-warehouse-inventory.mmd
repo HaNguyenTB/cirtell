@@ -1,0 +1,70 @@
+erDiagram
+  WAREHOUSES ||--o{ WAREHOUSE_ZONES : contains
+  WAREHOUSES ||--o{ INVENTORY : stores
+  WAREHOUSE_ZONES ||--o{ INVENTORY : bucket
+  PARTS ||--o{ INVENTORY : stocked
+  PARTS ||--o{ INVENTORY_MOVEMENTS : moved
+  WAREHOUSES ||--o{ INVENTORY_MOVEMENTS : from_wh
+  WAREHOUSES ||--o{ INVENTORY_MOVEMENTS : to_wh
+  USERS ||--o{ INVENTORY_MOVEMENTS : created_by
+
+  WAREHOUSES {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string code
+    string name
+    string status
+    string scope_code_uk
+  }
+
+  WAREHOUSE_ZONES {
+    string id PK
+    string warehouse_id FK
+    string tenant_id FK
+    string company_id FK
+    string name
+    string zone_type
+    int capacity_units
+  }
+
+  PARTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string part_number
+    string model_name
+    string category
+  }
+
+  INVENTORY {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string warehouse_id FK
+    string zone_id FK
+    string part_id FK
+    string condition
+    int quantity
+    string bucket_scope_uk
+  }
+
+  INVENTORY_MOVEMENTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string from_warehouse_id FK
+    string to_warehouse_id FK
+    string part_id FK
+    int quantity
+    string movement_type
+    string transaction_id FK
+    string idempotency_key
+  }
+
+  USERS {
+    string id PK
+    string email
+    string role
+    string status
+  }

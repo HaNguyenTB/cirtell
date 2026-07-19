@@ -1,0 +1,38 @@
+flowchart TD
+  Start([Start]) --> Auth["Xác thực người dùng"]
+  Auth --> Perm["Kiểm tra EDIT_WAREHOUSE hoặc auto-sync"]
+  Perm --> Scope["Resolve tenant/company scope"]
+  Scope --> Input["Nhập part/qty/condition/warehouse-zone"]
+  Input --> Valid{"Dữ liệu hợp lệ?"}
+
+  Valid -->|No| Error["Trả lỗi 400/403"]
+  Error --> End([End])
+
+  Valid -->|Yes| ScopeCheck["Kiểm tra part/warehouse/zone cùng scope"]
+  ScopeCheck --> Outbound{"Movement cần trừ tồn?"}
+
+  Outbound -->|No| Receive["Receive: tăng tồn đích"]
+  Outbound -->|Yes| StockCheck{"Tồn kho đủ?"}
+  StockCheck -->|No| Insufficient["409 INSUFFICIENT_STOCK"]
+  Insufficient --> NoPartial["Không ghi partial data"]
+  NoPartial --> End
+
+  StockCheck -->|Yes| ApplyOutbound["Giảm nguồn và tăng đích"]
+  Receive --> Batch["D1 batch inventory + inventory_movements"]
+  ApplyOutbound --> Batch
+  Batch --> Audit["Ghi audit INVENTORY_MOVE/AUTO"]
+  Audit --> End
+
+  classDef startEnd fill:#e6f7ef,stroke:#047857,stroke-width:2px,color:#064e3b;
+  classDef process fill:#f8fafc,stroke:#64748b,stroke-width:1px,color:#0f172a;
+  classDef decision fill:#fff7ed,stroke:#c2410c,stroke-width:1px,color:#7c2d12;
+  classDef error fill:#fef2f2,stroke:#dc2626,stroke-width:1px,color:#7f1d1d;
+  classDef data fill:#ecfdf5,stroke:#059669,stroke-width:1px,color:#064e3b;
+  classDef audit fill:#f0fdf4,stroke:#16a34a,stroke-dasharray: 4 3,color:#14532d;
+
+  class Start,End startEnd;
+  class Auth,Perm,Scope,Input,ScopeCheck,Receive,ApplyOutbound,NoPartial process;
+  class Valid,Outbound,StockCheck decision;
+  class Error,Insufficient error;
+  class Batch data;
+  class Audit audit;

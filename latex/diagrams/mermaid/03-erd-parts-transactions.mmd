@@ -1,0 +1,94 @@
+erDiagram
+  VENDORS ||--o{ PARTS : supplies
+  PARTS ||--o{ TRANSACTION_ITEMS : referenced_by
+  TRANSACTIONS ||--|{ TRANSACTION_ITEMS : contains
+  TRANSACTIONS ||--o| TRANSACTION_PO_FILES : has_po
+  MARKETS ||--o{ TRANSACTIONS : market
+  CONTACTS ||--o{ TRANSACTIONS : buyer_contact
+  WAREHOUSES ||--o{ TRANSACTIONS : source
+  WAREHOUSES ||--o{ TRANSACTIONS : destination
+
+  VENDORS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string vendor_name
+    string scope_name_uk
+    datetime created_at
+  }
+
+  PARTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string part_number
+    string model_name
+    string vendor_id FK
+    string category
+    float emission_factor_kg
+    string scope_part_number_uk
+  }
+
+  TRANSACTIONS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    date date
+    string movement_type
+    string market_id FK
+    string contact_id FK
+    string source_warehouse_id FK
+    string destination_warehouse_id FK
+    string inventory_sync_status
+  }
+
+  TRANSACTION_ITEMS {
+    string id PK
+    string transaction_id FK
+    string tenant_id FK
+    string company_id FK
+    string part_id FK
+    int quantity
+    string condition
+    string source_warehouse_id FK
+    string destination_warehouse_id FK
+    datetime superseded_at
+  }
+
+  TRANSACTION_PO_FILES {
+    string transaction_id PK
+    string file_name
+    string content_type
+    string file_data
+    string uploaded_by FK
+    datetime uploaded_at
+  }
+
+  MARKETS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string market_name
+    string country
+    string region
+    string scope_name_uk
+  }
+
+  CONTACTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string company_name
+    string contact_person_name
+    string email
+    string country
+  }
+
+  WAREHOUSES {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string code
+    string name
+    string status
+  }

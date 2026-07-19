@@ -162,9 +162,9 @@ JSON Web Token (JWT) là tiêu chuẩn được định nghĩa trong RFC 7519 \c
 
 Trong Cirtell, JWT được sử dụng theo mô hình:
 \begin{enumerate}[leftmargin=1.2cm]
-    \item Người dùng đăng nhập qua Azure AD (MSAL) \cite{msalDoc}; nhận \emph{ID token} từ Microsoft.
-    \item Backend xác thực ID token này, sau đó cấp phát JWT nội bộ chứa \texttt{user\_id}, \texttt{tenant\_id}, \texttt{roles}.
-    \item Mọi request tiếp theo đính kèm JWT trong header \texttt{Authorization: Bearer ...}.
+    \item Người dùng đăng nhập qua Google Identity/OIDC; frontend nhận \emph{ID token} từ Google.
+    \item Backend xác thực ID token này bằng JWKS, sau đó cấp phát app session JWT chứa \texttt{user\_id}, \texttt{tenant\_id}, \texttt{company\_id}, \texttt{role} và \texttt{session\_version}.
+    \item Mọi request tiếp theo đính kèm app session JWT qua cookie hoặc header \texttt{Authorization: Bearer ...}.
     \item Middleware xác thực kiểm tra chữ ký, hạn dùng và inject context người dùng vào request.
 \end{enumerate}
 
@@ -194,6 +194,8 @@ Hệ thống áp dụng các biện pháp phòng chống cơ bản theo OWASP To
 \section{Quy trình nghiệp vụ tham chiếu}
 \label{sec:bpm}
 Đồ án xây dựng quy trình nghiệp vụ chuẩn hóa cho vòng đời thiết bị, gồm năm giai đoạn liên kết chặt chẽ:
+
+\diagramfigure[0.95]{diagrams/rendered/02-to-be-process.pdf}{Quy trình To-be tổng quát trong Cirtell.}{fig:to-be-process}
 
 \textbf{Giai đoạn 1 -- Khởi tạo dự án xử lý.}\\
 Cán bộ kế hoạch tạo bản ghi dự án trong trạng thái \texttt{Draft}, ghi nhận thông tin: tên dự án, site nguồn, đơn vị thực hiện, thời gian dự kiến, người phụ trách. Hệ thống ghi audit log thao tác tạo và yêu cầu xác nhận trước khi chuyển trạng thái.

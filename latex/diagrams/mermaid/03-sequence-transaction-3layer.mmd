@@ -1,0 +1,61 @@
+sequenceDiagram
+  box rgba(239, 246, 255, 0.65) Presentation Layer
+    actor U as Admin/User
+    participant UI as Transactions UI
+  end
+
+  box rgba(236, 253, 245, 0.65) Application/API Layer
+    participant API as Worker Transactions API
+    participant AUTH as Auth/RBAC
+    participant SCOPE as Tenant Scope
+    participant TXSVC as Transaction Service
+    participant INVSVC as Inventory Sync Service
+  end
+
+  box rgba(245, 243, 255, 0.65) Data Layer
+    participant DB as D1 business tables
+    participant AUD as audit_log
+  end
+
+  U->>UI: Nhập transaction và line items
+  UI->>API: POST /api/transactions
+  API->>AUTH: Verify session and EDIT_TRANSACTIONS
+  AUTH-->>API: authorized
+  API->>SCOPE: Resolve tenant/company scope
+  SCOPE-->>API: tenantId companyId
+  Note over SCOPE,DB: All references are validated inside the resolved tenant/company scope.
+  API->>TXSVC: Validate payload
+  TXSVC->>DB: Validate part warehouse project market contact
+  DB-->>TXSVC: valid refs
+  TXSVC->>TXSVC: Prepare header and active line items
+  TXSVC->>INVSVC: Build sync plan by movement_type
+  INVSVC->>DB: Check stock for Sale Redeploy Recycle
+
+  alt Insufficient stock
+    DB-->>INVSVC: available < requested
+    INVSVC-->>API: INSUFFICIENT_STOCK
+    API-->>UI: 409 no partial write
+  else Enough stock or Purchase
+    INVSVC->>DB: Prepare inventory updates and movements
+    TXSVC->>DB: D1 batch transaction items inventory movements
+    TXSVC->>AUD: INSERT TRANSACTION_CREATE and INVENTORY_MOVE_AUTO
+    API-->>UI: 201 transaction id inventorySyncStatus
+    UI->>API: GET scoped list/summary
+    API->>DB: SELECT transactions/dashboard data in scope
+    DB-->>API: updated list/summary
+    API-->>UI: refreshed data
+  end
+
+  opt Missing warehouse or part for sync
+    TXSVC->>DB: INSERT transaction and items only
+    TXSVC->>AUD: INSERT TRANSACTION_CREATE
+    API-->>UI: 201 inventorySyncStatus not_ready
+  end
+
+  alt Cross-scope reference
+    TXSVC-->>API: 400/404 invalid reference
+    API-->>UI: error no write
+  else Invalid movement or quantity
+    TXSVC-->>API: 400 validation error
+    API-->>UI: validation error
+  end

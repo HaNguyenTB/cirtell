@@ -1,0 +1,40 @@
+flowchart LR
+  GID["Google Identity<br/>Provider"]
+  Admin["Super Admin / Admin"]
+
+  subgraph Cirtell["Cirtell"]
+    Login(["Đăng nhập<br/>Google SSO"])
+    Whitelist(["Xác minh<br/>user whitelist"])
+    Scope(["Chọn<br/>company scope"])
+    Tenant(["Quản lý<br/>tenant"])
+    Company(["Quản lý<br/>company"])
+    UserRole(["Quản lý<br/>user role/status"])
+    Audit(["Xem<br/>audit log"])
+    AuditNote["Thao tác quản trị<br/>được ghi audit log"]
+  end
+
+  GID -->|"&lt;&lt;external&gt;&gt;"| Login
+  Admin --> Login
+  Admin --> Tenant
+  Admin --> Company
+  Admin --> UserRole
+  Admin --> Audit
+
+  Login -->|"&lt;&lt;include&gt;&gt;"| Whitelist
+  Login -->|"&lt;&lt;include&gt;&gt;"| Scope
+  Tenant -.-> AuditNote
+  Company -.-> AuditNote
+  UserRole -.-> AuditNote
+  AuditNote -.-> Audit
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Admin actor;
+  class GID external;
+  class Login,Whitelist,Scope,Tenant,Company,UserRole,Audit usecase;
+  class AuditNote note;
+  class Cirtell boundary;

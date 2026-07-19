@@ -1,0 +1,86 @@
+erDiagram
+  PROJECTS ||--o{ PROJECT_LOGISTICS : plans
+  PROJECTS ||--o{ PROJECT_EVIDENCE : stores
+  PROJECTS ||--o{ PROJECT_COMMENTS : comments
+  PROJECTS ||--o{ PROJECT_ACTIVITY : activity
+  PROJECTS ||--o{ PROJECT_VENDORS : tags
+  TELECOM_VENDORS ||--o{ PROJECT_VENDORS : selected
+  PROJECTS ||--o{ PROJECT_TECHNOLOGIES : tags
+  TELECOM_TECHNOLOGIES ||--o{ PROJECT_TECHNOLOGIES : selected
+
+  PROJECTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string name
+    string status
+    string internal_reference
+  }
+
+  PROJECT_LOGISTICS {
+    string id PK
+    string project_id FK
+    string tenant_id FK
+    string company_id FK
+    string shipment_type
+    string status
+    string carrier
+    date scheduled_date
+  }
+
+  PROJECT_EVIDENCE {
+    string id PK
+    string project_id FK
+    string tenant_id FK
+    string company_id FK
+    string title
+    string evidence_type
+    string r2_key
+    string uploaded_by FK
+  }
+
+  PROJECT_COMMENTS {
+    string id PK
+    string project_id FK
+    string user_id FK
+    string body
+    datetime created_at
+  }
+
+  PROJECT_ACTIVITY {
+    string id PK
+    string project_id FK
+    string user_id FK
+    string action
+    string entity_type
+    string entity_id
+    datetime created_at
+  }
+
+  TELECOM_VENDORS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string name
+    string category
+    string scope_name_uk
+  }
+
+  TELECOM_TECHNOLOGIES {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string name
+    string generation
+    string scope_name_uk
+  }
+
+  PROJECT_VENDORS {
+    string project_id PK
+    string vendor_id PK
+  }
+
+  PROJECT_TECHNOLOGIES {
+    string project_id PK
+    string technology_id PK
+  }

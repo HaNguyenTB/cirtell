@@ -1,0 +1,39 @@
+flowchart LR
+  Operator["Admin / User<br/>Operator"]
+  Viewer["Viewer / Manager"]
+
+  subgraph Cirtell["Cirtell"]
+    CreateGhg(["Tạo<br/>GHG entry"])
+    Calculate(["Tính CO2e"])
+    Avoided(["Đồng bộ<br/>avoided emissions"])
+    Report(["Xem báo cáo<br/>scope/category"])
+    Kpi(["Xem<br/>KPI headline"])
+    TimeFilter(["Lọc dashboard<br/>theo thời gian"])
+    FactorNote["Avoided emissions:<br/>quantity x factor"]
+  end
+
+  Operator --> CreateGhg
+  Operator --> Avoided
+  Operator --> Report
+  Operator --> Kpi
+  Viewer --> Report
+  Viewer --> Kpi
+  Viewer -.-> TimeFilter
+
+  CreateGhg -->|"&lt;&lt;include&gt;&gt;"| Calculate
+  Avoided --> Calculate
+  Avoided -.-> FactorNote
+  Report --> Kpi
+  TimeFilter -.->|"&lt;&lt;extend&gt;&gt;"| Kpi
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Operator,Viewer actor;
+  class CreateGhg,Calculate,Avoided,Report,Kpi usecase;
+  class TimeFilter optional;
+  class FactorNote note;
+  class Cirtell boundary;

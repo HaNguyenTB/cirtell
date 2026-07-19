@@ -1,0 +1,123 @@
+classDiagram
+  direction LR
+
+  class Vendor {
+    +string id
+    +string vendorName
+    +string tenantId
+    +string companyId
+    +datetime createdAt
+  }
+
+  class Part {
+    +string id
+    +string partNumber
+    +string modelName
+    +string category
+    +number weightKg
+    +number emissionFactorKg
+    +string companyId
+  }
+
+  class Transaction {
+    +string id
+    +date date
+    +string movementType
+    +number quantity
+    +string projectId
+    +string inventorySyncStatus
+    +number inventorySyncVersion
+  }
+
+  class TransactionItem {
+    +string id
+    +string transactionId
+    +string partId
+    +number quantity
+    +string condition
+    +string sourceWarehouseId
+    +string destinationWarehouseId
+  }
+
+  class PurchaseOrderFile {
+    +string transactionId
+    +string fileName
+    +string contentType
+    +blob fileData
+    +datetime uploadedAt
+  }
+
+  class Warehouse {
+    +string id
+    +string code
+    +string name
+    +string status
+    +string companyId
+  }
+
+  class WarehouseZone {
+    +string id
+    +string warehouseId
+    +string name
+    +string zoneType
+    +number capacityUnits
+  }
+
+  class Inventory {
+    +string id
+    +string warehouseId
+    +string zoneId
+    +string partId
+    +string condition
+    +number quantity
+    +datetime updatedAt
+  }
+
+  class InventoryMovement {
+    +string id
+    +string movementType
+    +string partId
+    +number quantity
+    +string transactionId
+    +string transactionItemId
+    +string idempotencyKey
+  }
+
+  class InventorySyncService {
+    +buildSyncPlan()
+    +checkStock()
+    +applySyncPlan()
+    +reverseMovements()
+  }
+
+  Vendor "1" --> "0..N" Part
+  Transaction "1" --> "1..N" TransactionItem
+  Part "1" --> "0..N" TransactionItem
+  Transaction "1" --> "0..1" PurchaseOrderFile
+  Warehouse "1" --> "0..N" WarehouseZone
+  Warehouse "1" --> "0..N" Inventory
+  WarehouseZone "0..1" --> "0..N" Inventory
+  Part "1" --> "0..N" Inventory
+  Transaction "0..1" --> "0..N" InventoryMovement : generated when synced
+  InventoryMovement "0..N" --> Part
+  InventoryMovement ..> Inventory : updates
+  InventorySyncService ..> Transaction
+  InventorySyncService ..> InventoryMovement
+
+  note for Transaction "not_ready transactions may have no inventory movement"
+  note for InventoryMovement "idempotencyKey prevents duplicate generated movement"
+
+  classDef catalog fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
+  classDef transaction fill:#ecfdf5,stroke:#047857,color:#064e3b
+  classDef inventory fill:#f8fafc,stroke:#475569,color:#0f172a
+  classDef service fill:#fefce8,stroke:#ca8a04,color:#713f12
+  class Vendor catalog
+  class Part catalog
+  class Transaction transaction
+  class TransactionItem transaction
+  class PurchaseOrderFile transaction
+  class Warehouse inventory
+  class WarehouseZone inventory
+  class Inventory inventory
+  class InventoryMovement inventory
+  class InventorySyncService service

@@ -1,0 +1,73 @@
+erDiagram
+  TENANTS ||--o{ COMPANIES : contains
+  TENANTS ||--o{ USERS : owns
+  USERS ||--o{ USER_COMPANY_ASSIGNMENTS : assigned
+  COMPANIES ||--o{ USER_COMPANY_ASSIGNMENTS : grants
+  TENANTS ||--o{ TENANT_APP_ACCESS : enables
+  USERS ||--o{ AUDIT_LOG : writes
+  TENANTS ||--o{ AUDIT_LOG : scopes
+  COMPANIES ||--o{ AUDIT_LOG : scopes
+  TENANTS ||--o{ TENANTS : parent_child
+
+  TENANTS {
+    string id PK
+    string name
+    string domain
+    int is_active
+    int is_platform_tenant
+    string parent_tenant_id FK
+    string group_type
+    datetime updated_at
+  }
+
+  COMPANIES {
+    string id PK
+    string tenant_id FK
+    string code
+    string name
+    string logo_url
+    string tenant_code_uk
+    datetime updated_at
+  }
+
+  USERS {
+    string id PK
+    string email
+    string name
+    string role
+    string status
+    string tenant_id FK
+    string company_id FK
+    int is_super_admin
+    int session_version
+  }
+
+  USER_COMPANY_ASSIGNMENTS {
+    string id PK
+    string user_id FK
+    string tenant_id FK
+    string company_id FK
+    string role
+    datetime assigned_at
+    string user_company_uk
+  }
+
+  TENANT_APP_ACCESS {
+    string id PK
+    string tenant_id FK
+    string app_id
+    string granted_by FK
+    datetime granted_at
+    string tenant_app_uk
+  }
+
+  AUDIT_LOG {
+    string id PK
+    string user_id FK
+    string tenant_id FK
+    string company_id FK
+    string action
+    string resource_type
+    string resource_id
+    datetime created_at
+  }

@@ -65,6 +65,14 @@
 \usepackage{tikz}       % Vẽ hình vector trực tiếp trong LaTeX
 \usetikzlibrary{positioning,arrows.meta,shapes.geometric,shapes.symbols,fit,calc,backgrounds,decorations.pathreplacing}
 \graphicspath{{./images/}{./assets/}} % Khai báo thư mục chứa ảnh
+\newcommand{\diagramfigure}[4][1]{%
+  \begin{figure}[H]
+    \centering
+    \includegraphics[width=#1\linewidth]{#2}
+    \caption{#3}
+    \label{#4}
+  \end{figure}
+}
 % Cho phép xuống dòng tại dấu gạch dưới và dấu chấm trong văn bản kỹ thuật
 \usepackage{seqsplit}
 \usepackage{float}

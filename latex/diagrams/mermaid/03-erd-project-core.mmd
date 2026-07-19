@@ -1,0 +1,75 @@
+erDiagram
+  PROJECTS ||--o{ PROJECT_EQUIPMENT : tracks
+  PROJECTS ||--o{ PROJECT_WORKFLOW_STAGES : has_stages
+  PROJECT_WORKFLOW_STAGES ||--o{ PROJECT_WORKFLOW_TASKS : has_tasks
+  PROJECTS ||--o{ PROJECT_FINANCIALS : records
+  WAREHOUSES ||--o{ PROJECTS : source
+  USERS ||--o{ PROJECTS : created_by
+
+  PROJECTS {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string name
+    string source_warehouse_id FK
+    string status
+    float budget_total
+    string created_by FK
+  }
+
+  PROJECT_EQUIPMENT {
+    string id PK
+    string project_id FK
+    string tenant_id FK
+    string company_id FK
+    string part_id FK
+    string item_name
+    int quantity
+    string current_stage
+    float co2_avoided_kg
+  }
+
+  PROJECT_WORKFLOW_STAGES {
+    string id PK
+    string project_id FK
+    string stage
+    string label
+    string status
+    int sort_order
+    string project_stage_uk
+  }
+
+  PROJECT_WORKFLOW_TASKS {
+    string id PK
+    string project_id FK
+    string stage_id FK
+    string title
+    string status
+    date due_date
+  }
+
+  PROJECT_FINANCIALS {
+    string id PK
+    string project_id FK
+    string tenant_id FK
+    string company_id FK
+    string type
+    string category
+    float amount
+    string currency
+  }
+
+  WAREHOUSES {
+    string id PK
+    string tenant_id FK
+    string company_id FK
+    string code
+    string name
+  }
+
+  USERS {
+    string id PK
+    string email
+    string name
+    string role
+  }

@@ -1,0 +1,44 @@
+flowchart LR
+  Operator["Admin / User<br/>Operator"]
+  Viewer["Viewer / Manager"]
+
+  subgraph Cirtell["Cirtell"]
+    ManageZone(["Tạo warehouse<br/>và zone"])
+    Receive(["Receive"])
+    Ship(["Ship"])
+    Transfer(["Transfer"])
+    Adjust(["Adjust"])
+    Stock(["Xem<br/>current stock"])
+    History(["Xem<br/>movement history"])
+    CheckStock(["Kiểm tra<br/>insufficient stock"])
+    AuditNote["Movement và thay đổi tồn kho<br/>được ghi audit log"]
+  end
+
+  Operator --> ManageZone
+  Operator --> Receive
+  Operator --> Ship
+  Operator --> Transfer
+  Operator --> Adjust
+  Operator --> Stock
+  Operator --> History
+  Viewer --> Stock
+  Viewer --> History
+
+  Ship -->|"&lt;&lt;include&gt;&gt;"| CheckStock
+  Transfer -->|"&lt;&lt;include&gt;&gt;"| CheckStock
+  Adjust -->|"&lt;&lt;include&gt;&gt;"| CheckStock
+  Receive -.-> AuditNote
+  Ship -.-> AuditNote
+  Transfer -.-> AuditNote
+  Adjust -.-> AuditNote
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Operator,Viewer actor;
+  class ManageZone,Receive,Ship,Transfer,Adjust,Stock,History,CheckStock usecase;
+  class AuditNote note;
+  class Cirtell boundary;

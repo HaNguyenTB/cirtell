@@ -1,0 +1,93 @@
+erDiagram
+  TENANTS ||--o{ COMPANIES : owns
+  COMPANIES ||--o{ USERS : scopes
+  COMPANIES ||--o{ PARTS : catalogs
+  VENDORS ||--o{ PARTS : supplies
+  COMPANIES ||--o{ WAREHOUSES : operates
+  WAREHOUSES ||--o{ WAREHOUSE_ZONES : contains
+  PARTS ||--o{ INVENTORY : stocked_as
+  WAREHOUSES ||--o{ INVENTORY : stores
+  INVENTORY ||--o{ INVENTORY_MOVEMENTS : changes
+  PARTS ||--o{ TRANSACTION_ITEMS : referenced_by
+  TRANSACTIONS ||--o{ TRANSACTION_ITEMS : contains
+  PROJECTS ||--o{ PROJECT_EQUIPMENT : tracks
+  PARTS ||--o{ PROJECT_EQUIPMENT : links
+  TRANSACTIONS ||--o{ TRANSACTION_PO_FILES : has
+  USERS ||--o{ AUDIT_LOG : acts
+
+  TENANTS {
+    text id PK
+    text name
+  }
+  COMPANIES {
+    text id PK
+    text tenant_id FK
+    text name
+  }
+  USERS {
+    text id PK
+    text company_id FK
+    text role
+    integer session_version
+  }
+  PARTS {
+    text id PK
+    text company_id FK
+    text part_number
+  }
+  VENDORS {
+    text id PK
+    text company_id FK
+    text vendor_name
+  }
+  WAREHOUSES {
+    text id PK
+    text company_id FK
+    text code
+  }
+  WAREHOUSE_ZONES {
+    text id PK
+    text warehouse_id FK
+    text name
+  }
+  INVENTORY {
+    text id PK
+    text warehouse_id FK
+    text part_id FK
+    integer quantity
+  }
+  INVENTORY_MOVEMENTS {
+    text id PK
+    text inventory_id FK
+    text transaction_id FK
+    integer quantity
+  }
+  TRANSACTIONS {
+    text id PK
+    text movement_type
+    text inventory_sync_status
+  }
+  TRANSACTION_ITEMS {
+    text id PK
+    text transaction_id FK
+    text part_id FK
+  }
+  PROJECTS {
+    text id PK
+    text company_id FK
+    text status
+  }
+  PROJECT_EQUIPMENT {
+    text id PK
+    text project_id FK
+    text part_id FK
+  }
+  TRANSACTION_PO_FILES {
+    text transaction_id PK
+    text file_name
+  }
+  AUDIT_LOG {
+    text id PK
+    text user_id FK
+    text action
+  }

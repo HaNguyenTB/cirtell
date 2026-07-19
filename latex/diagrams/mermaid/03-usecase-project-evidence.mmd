@@ -1,0 +1,44 @@
+flowchart LR
+  Operator["Admin / User<br/>Operator"]
+  Viewer["Viewer / Manager"]
+
+  subgraph Cirtell["Cirtell"]
+    CreateProject(["Tạo project"])
+    DefaultWorkflow(["Khởi tạo<br/>workflow mặc định"])
+    AddEquipment(["Thêm<br/>equipment"])
+    UpdateWorkflow(["Cập nhật<br/>workflow stage/task"])
+    Financials(["Thêm<br/>financials/logistics"])
+    Evidence(["Upload<br/>evidence"])
+    Activity(["Comment và xem<br/>activity log"])
+    ProjectDetail(["Xem<br/>project detail"])
+    ActivityNote["Project activity ghi lại<br/>cập nhật chính theo scope"]
+  end
+
+  Operator --> CreateProject
+  Operator --> AddEquipment
+  Operator --> UpdateWorkflow
+  Operator --> Financials
+  Operator --> Evidence
+  Operator --> Activity
+  Operator --> ProjectDetail
+  Viewer --> ProjectDetail
+  Viewer --> Activity
+
+  CreateProject -->|"&lt;&lt;include&gt;&gt;"| DefaultWorkflow
+  Evidence -.->|"&lt;&lt;extend&gt;&gt;"| UpdateWorkflow
+  Evidence -.->|"&lt;&lt;extend&gt;&gt;"| ProjectDetail
+  AddEquipment -.-> ActivityNote
+  UpdateWorkflow -.-> ActivityNote
+  Evidence -.-> ActivityNote
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Operator,Viewer actor;
+  class CreateProject,DefaultWorkflow,AddEquipment,UpdateWorkflow,Financials,Activity,ProjectDetail usecase;
+  class Evidence optional;
+  class ActivityNote note;
+  class Cirtell boundary;

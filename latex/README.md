@@ -20,3 +20,23 @@ Neu da cai TeX Live/MiKTeX:
 - pdflatex main.tex
 
 (Chay 2 lan de cap nhat muc luc)
+
+## So do Mermaid
+Tat ca so do nen co file nguon `.mmd` trong:
+
+- `diagrams/mermaid/`
+
+File render PDF duoc tao vao:
+
+- `diagrams/rendered/`
+
+Tu root repository, chay:
+
+- `npm install`
+- `npm run diagrams:render`
+
+Trong LaTeX, nhung so do bang macro:
+
+```tex
+\diagramfigure{diagrams/rendered/03-architecture.pdf}{Caption cua hinh}{fig:architecture}
+```

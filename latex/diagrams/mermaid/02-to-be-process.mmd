@@ -1,0 +1,31 @@
+flowchart LR
+  Scope[Tenant/company scope]
+  Admin[Administration]
+  Parts[Parts Catalog]
+  Projects[Project Lifecycle]
+  Transactions[Transactions]
+  Inventory[Warehouse/Inventory]
+  Carbon[Carbon Accounting]
+  Dashboard[Dashboard]
+  Audit[Audit log]
+
+  Scope --> Parts --> Projects --> Transactions --> Inventory --> Carbon --> Dashboard
+  Scope --> Admin
+  Admin --> Parts
+
+  Parts -.-> Audit
+  Projects -.-> Audit
+  Transactions -.-> Audit
+  Inventory -.-> Audit
+  Carbon -.-> Audit
+  Admin -.-> Audit
+
+  classDef scope fill:#eef2ff,stroke:#3730a3,stroke-width:1.5px,color:#111827;
+  classDef business fill:#ecfdf5,stroke:#047857,stroke-width:1.5px,color:#111827;
+  classDef reporting fill:#fefce8,stroke:#a16207,stroke-width:1.5px,color:#111827;
+  classDef audit fill:#f8fafc,stroke:#475569,stroke-width:1.5px,stroke-dasharray: 5 4,color:#111827;
+
+  class Scope,Admin scope;
+  class Parts,Projects,Transactions,Inventory,Carbon business;
+  class Dashboard reporting;
+  class Audit audit;

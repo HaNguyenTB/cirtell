@@ -1,0 +1,60 @@
+flowchart LR
+  subgraph FE["Frontend"]
+    UI["Transaction UI"]
+    POST["POST /api/transactions"]
+    Refresh["Refresh list/summary"]
+    ShowError["Show 409 error"]
+  end
+
+  subgraph API["Transaction API"]
+    Auth["Auth + EDIT_TRANSACTIONS"]
+    Scope["Resolve tenant/company scope"]
+    Validate["Validate date, type, qty, items"]
+    Part{"Part input?"}
+    PartScope["Validate part_id in scope"]
+    PartCreate["Create part needs_review"]
+    Refs["Validate market/contact/warehouses/project"]
+    Items{"Line items present?"}
+    UseItems["Use line items"]
+    Header["Use header fallback"]
+  end
+
+  subgraph INV["Inventory Sync Service"]
+    Build["Build sync plan"]
+    Map["Purchase=Receive<br/>Sale/Recycle=Ship<br/>Redeploy=Transfer"]
+    Ready{"Enough sync data?"}
+    CheckStock["Check stock for outbound"]
+    StockOk{"Stock enough?"}
+  end
+
+  subgraph D1["D1 Batch"]
+    NotReady["Insert transaction + items<br/>status not_ready"]
+    Batch["Insert transaction + items<br/>inventory updates<br/>inventory_movements + audit"]
+    Created["201 + inventorySyncStatus"]
+    Reject["409 INSUFFICIENT_STOCK<br/>no partial data"]
+  end
+
+  UI --> POST --> Auth --> Scope --> Validate --> Part
+  Part -->|part_id| PartScope --> Refs
+  Part -->|Purchase + new part_number| PartCreate --> Refs
+  Part -->|none| Refs
+  Refs --> Items
+  Items -->|Yes| UseItems --> Build
+  Items -->|No| Header --> Build
+  Build --> Map --> Ready
+  Ready -->|No| NotReady --> Created --> Refresh
+  Ready -->|Yes| CheckStock --> StockOk
+  StockOk -->|No| Reject --> ShowError
+  StockOk -->|Yes| Batch --> Created
+
+  classDef success fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#064e3b;
+  classDef error fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d;
+  classDef data fill:#eff6ff,stroke:#2563eb,stroke-width:1px,color:#1e3a8a;
+  classDef process fill:#f8fafc,stroke:#64748b,stroke-width:1px,color:#0f172a;
+  classDef decision fill:#fff7ed,stroke:#c2410c,stroke-width:1px,color:#7c2d12;
+
+  class Created,Refresh success;
+  class Reject,ShowError error;
+  class NotReady,Batch,PartCreate data;
+  class Part,Items,Ready,StockOk decision;
+  class UI,POST,Auth,Scope,Validate,PartScope,Refs,UseItems,Header,Build,Map,CheckStock process;

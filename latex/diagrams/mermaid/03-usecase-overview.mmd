@@ -1,0 +1,67 @@
+flowchart LR
+  GID["Google Identity<br/>Provider"]
+  Admin["Super Admin / Admin"]
+  Operator["User / Operator"]
+  Viewer["Viewer / Manager"]
+
+  subgraph Cirtell["Cirtell"]
+    Auth(["Xác thực và chọn<br/>tenant/company scope"])
+    AdminUC(["Quản trị<br/>tenant/company/user"])
+    Parts(["Quản lý<br/>Parts Catalog"])
+    Tx(["Quản lý<br/>Transactions"])
+    Warehouse(["Quản lý<br/>Warehouse/Inventory"])
+    Project(["Quản lý<br/>Project Lifecycle"])
+    Carbon(["Ghi nhận<br/>Carbon Accounting"])
+    Dashboard(["Xem<br/>Dashboard"])
+    Audit(["Xem<br/>Audit Log"])
+    ScopeNote["Tenant/company scope<br/>là tiền đề chung"]
+  end
+
+  GID -->|"&lt;&lt;external&gt;&gt;"| Auth
+  Admin --> Auth
+  Admin --> AdminUC
+  Admin --> Audit
+  Admin --> Parts
+  Admin --> Tx
+  Admin --> Warehouse
+  Admin --> Project
+  Admin --> Carbon
+  Admin --> Dashboard
+  Operator --> Auth
+  Operator --> Parts
+  Operator --> Tx
+  Operator --> Warehouse
+  Operator --> Project
+  Operator --> Carbon
+  Viewer --> Auth
+  Viewer --> Parts
+  Viewer --> Tx
+  Viewer --> Warehouse
+  Viewer --> Project
+  Viewer --> Carbon
+  Viewer --> Dashboard
+
+  ScopeNote -.-> Parts
+  ScopeNote -.-> Tx
+  ScopeNote -.-> Warehouse
+  ScopeNote -.-> Project
+  ScopeNote -.-> Carbon
+  ScopeNote -.-> Dashboard
+  Parts -.-> Audit
+  Tx -.-> Audit
+  Warehouse -.-> Audit
+  Project -.-> Audit
+  Carbon -.-> Audit
+  AdminUC -.-> Audit
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Admin,Operator,Viewer actor;
+  class GID external;
+  class Auth,AdminUC,Parts,Tx,Warehouse,Project,Carbon,Dashboard,Audit usecase;
+  class ScopeNote note;
+  class Cirtell boundary;

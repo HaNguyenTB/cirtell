@@ -1,0 +1,54 @@
+sequenceDiagram
+  box rgba(239, 246, 255, 0.65) Presentation Layer
+    actor U as Admin/User
+    participant UI as Projects UI
+  end
+
+  box rgba(236, 253, 245, 0.65) Application/API Layer
+    participant API as Worker Projects API
+    participant AUTH as Auth/RBAC
+    participant SCOPE as Tenant Scope
+    participant PRJSVC as Project Service
+  end
+
+  box rgba(245, 243, 255, 0.65) Data Layer
+    participant DB as D1 project tables
+    participant AUD as audit_log
+    participant R2 as Cloudflare R2
+  end
+
+  U->>UI: Nhập project header
+  UI->>API: POST /api/projects
+  API->>AUTH: Verify session and MANAGE_PROJECTS
+  AUTH-->>API: authorized
+  API->>SCOPE: Resolve tenant/company scope
+  SCOPE-->>API: tenantId companyId
+  Note over SCOPE,DB: Project, workflow, evidence and activity rows are written in the same tenant/company scope.
+  API->>PRJSVC: Validate project data
+  PRJSVC->>DB: Validate source warehouse in scope
+
+  alt Invalid data or cross-scope warehouse
+    DB-->>PRJSVC: not found or invalid
+    PRJSVC-->>API: 400/404
+    API-->>UI: show error no project
+  else Valid project
+    PRJSVC->>DB: INSERT projects
+    PRJSVC->>DB: INSERT default workflow stages
+    PRJSVC->>DB: INSERT project_activity
+    PRJSVC->>AUD: INSERT CREATE_PROJECT
+    API-->>UI: 201 project id
+    UI->>API: GET /api/projects/:id
+    API->>DB: SELECT project detail stages tasks in scope
+    DB-->>API: project detail
+    API-->>UI: render project detail
+  end
+
+  opt Upload evidence after create
+    UI->>API: POST /api/projects/:id/evidence
+    API->>AUTH: Verify MANAGE_PROJECTS
+    API->>SCOPE: Check project in scope
+    API->>R2: PUT evidence object
+    API->>DB: INSERT project_evidence metadata
+    API->>DB: INSERT project_activity
+    API-->>UI: evidence metadata
+  end

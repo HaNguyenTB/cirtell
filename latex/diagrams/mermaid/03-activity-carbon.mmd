@@ -1,0 +1,40 @@
+flowchart TD
+  Start([Start]) --> Auth["Xác thực người dùng"]
+  Auth --> Perm["Kiểm tra quyền carbon"]
+  Perm --> Scope["Resolve tenant/company scope"]
+  Scope --> Source{"Nguồn dữ liệu?"}
+
+  Source -->|Manual| ManualInput["Nhập scope/category/activity/factor/period"]
+  ManualInput --> ManualValid{"Dữ liệu hợp lệ?"}
+  ManualValid -->|No| ManualError["Trả lỗi 400/403"]
+  ManualError --> End([End])
+  ManualValid -->|Yes| CalcActual["Tính activity * factor"]
+  CalcActual --> WriteManual["Ghi source_type=manual"]
+  WriteManual --> AuditManual["Ghi audit log"]
+
+  Source -->|Avoided sync| FilterTx["Lọc Redeploy/Recycle trong scope"]
+  FilterTx --> HasFactor{"Có emission_factor_kg?"}
+  HasFactor -->|No| WarnFactor["Trả warning missing factor"]
+  HasFactor -->|Yes| CalcAvoided["Tính avoided_co2e_kg"]
+  WarnFactor --> SyncResult["Tổng hợp kết quả sync"]
+  CalcAvoided --> UpsertAvoided["Upsert generated entry"]
+  UpsertAvoided --> AuditSync["Ghi audit sync"]
+  AuditSync --> SyncResult
+
+  AuditManual --> Report["Tổng hợp report actual/avoided"]
+  SyncResult --> Report
+  Report --> End
+
+  classDef startEnd fill:#e6f7ef,stroke:#047857,stroke-width:2px,color:#064e3b;
+  classDef process fill:#f8fafc,stroke:#64748b,stroke-width:1px,color:#0f172a;
+  classDef decision fill:#fff7ed,stroke:#c2410c,stroke-width:1px,color:#7c2d12;
+  classDef error fill:#fef2f2,stroke:#dc2626,stroke-width:1px,color:#7f1d1d;
+  classDef data fill:#ecfdf5,stroke:#059669,stroke-width:1px,color:#064e3b;
+  classDef audit fill:#f0fdf4,stroke:#16a34a,stroke-dasharray: 4 3,color:#14532d;
+
+  class Start,End startEnd;
+  class Auth,Perm,Scope,ManualInput,CalcActual,FilterTx,CalcAvoided,SyncResult,Report process;
+  class Source,ManualValid,HasFactor decision;
+  class ManualError,WarnFactor error;
+  class WriteManual,UpsertAvoided data;
+  class AuditManual,AuditSync audit;

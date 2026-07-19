@@ -1,0 +1,42 @@
+flowchart LR
+  Operator["Admin / User<br/>Operator"]
+  Viewer["Viewer / Manager"]
+
+  subgraph Cirtell["Cirtell"]
+    WriteParts(["Tạo/sửa/xóa<br/>parts"])
+    SearchParts(["Tìm kiếm/filter<br/>parts"])
+    CreateTx(["Tạo transaction<br/>Purchase/Sale/Redeploy/Recycle"])
+    LineItems(["Thêm<br/>line items"])
+    ProjectLink(["Gắn project<br/>nếu có"])
+    UploadPO(["Upload PO"])
+    DownloadPO(["Download PO"])
+    Summary(["Xem transaction<br/>summary"])
+  end
+
+  Operator --> WriteParts
+  Operator --> SearchParts
+  Operator --> CreateTx
+  Operator --> LineItems
+  Operator --> ProjectLink
+  Operator --> UploadPO
+  Operator --> DownloadPO
+  Operator --> Summary
+  Viewer --> SearchParts
+  Viewer --> DownloadPO
+  Viewer --> Summary
+
+  CreateTx -->|"&lt;&lt;include&gt;&gt;"| LineItems
+  CreateTx -.->|"&lt;&lt;extend&gt;&gt;"| ProjectLink
+  CreateTx -.->|"&lt;&lt;extend&gt;&gt;"| UploadPO
+  Summary --> DownloadPO
+
+  classDef actor fill:#eef2ff,stroke:#4f46e5,color:#111827;
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  classDef usecase fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef boundary fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef note fill:#fefce8,stroke:#ca8a04,color:#713f12,stroke-dasharray:4 3;
+  classDef optional fill:#f5f3ff,stroke:#7c3aed,color:#312e81,stroke-dasharray:4 3;
+  class Operator,Viewer actor;
+  class WriteParts,SearchParts,CreateTx,LineItems,DownloadPO,Summary usecase;
+  class ProjectLink,UploadPO optional;
+  class Cirtell boundary;

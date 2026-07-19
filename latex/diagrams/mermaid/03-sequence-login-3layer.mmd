@@ -1,0 +1,49 @@
+sequenceDiagram
+  box rgba(239, 246, 255, 0.65) Presentation Layer
+    actor U as Người dùng
+    participant UI as React Auth Store
+  end
+
+  box rgba(236, 253, 245, 0.65) Application/API Layer
+    participant API as Worker Auth API
+    participant AUTH as Auth/Session
+    participant SCOPE as Tenant Scope
+  end
+
+  box rgba(245, 243, 255, 0.65) Data Layer
+    participant DB as D1 users/assignments
+    participant AUD as audit_log
+  end
+
+  box rgba(255, 247, 237, 0.65) External Service
+    participant GID as Google Identity/JWKS
+  end
+
+  U->>UI: Chọn Sign in with Google
+  UI->>GID: OAuth/OIDC login request
+  GID-->>UI: Google ID token
+  UI->>API: POST /api/auth/validate
+  API->>AUTH: Verify token
+  AUTH->>GID: Fetch/verify JWKS
+  AUTH->>DB: SELECT user by google_sub/email
+  DB-->>AUTH: user role status session_version
+  AUTH->>DB: SELECT company assignments
+  AUTH->>SCOPE: Build default tenant/company scope
+  Note over SCOPE,DB: Tenant/company scope is attached to the app session and every scoped request.
+  AUTH->>DB: UPDATE last_login and google_sub
+  AUTH->>AUD: INSERT LOGIN
+  API-->>UI: success user context session cookie
+  UI->>API: GET /api/auth/me or scoped request
+  API->>SCOPE: Resolve scope
+  SCOPE->>DB: Scoped query
+  DB-->>API: scoped data
+
+  alt Token invalid or expired
+    API-->>UI: 401
+  else User not registered
+    API-->>UI: 403 USER_NOT_REGISTERED
+  else User suspended or deleted
+    API-->>UI: 403 ACCOUNT_DISABLED
+  else Session version mismatch
+    API-->>UI: 401 Session expired
+  end

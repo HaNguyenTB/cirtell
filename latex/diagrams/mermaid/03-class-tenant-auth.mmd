@@ -1,0 +1,86 @@
+classDiagram
+  direction LR
+
+  class Tenant {
+    +string id
+    +string code
+    +string name
+    +string status
+    +datetime createdAt
+  }
+
+  class Company {
+    +string id
+    +string tenantId
+    +string name
+    +string domain
+    +string status
+  }
+
+  class User {
+    +string id
+    +string email
+    +string name
+    +string role
+    +string status
+    +boolean isSuperAdmin
+    +number sessionVersion
+  }
+
+  class UserCompanyAssignment {
+    +string id
+    +string userId
+    +string tenantId
+    +string companyId
+    +string role
+    +string status
+  }
+
+  class TenantAppAccess {
+    +string tenantId
+    +string appId
+    +string status
+    +datetime grantedAt
+  }
+
+  class TenantScope {
+    +string tenantId
+    +string companyId
+    +string role
+    +resolveScope()
+    +filterQuery()
+  }
+
+  class AuditLog {
+    +string id
+    +string userId
+    +string tenantId
+    +string companyId
+    +string action
+    +string resourceType
+    +datetime createdAt
+  }
+
+  Tenant "1" --> "0..N" Company
+  Tenant "1" --> "0..N" User
+  Tenant "1" --> "0..N" TenantAppAccess
+  User "1" --> "0..N" UserCompanyAssignment
+  Company "1" --> "0..N" UserCompanyAssignment
+  User "1" --> "0..N" AuditLog
+  TenantScope ..> User
+  TenantScope ..> Company
+  TenantScope ..> AuditLog : filters
+
+  note for User "email is globally unique"
+  note for TenantScope "tenant/company scope limits business data"
+
+  classDef scope fill:#ecfdf5,stroke:#047857,color:#064e3b
+  classDef auth fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
+  classDef audit fill:#fff7ed,stroke:#ea580c,color:#7c2d12
+  class Tenant scope
+  class Company scope
+  class TenantScope scope
+  class TenantAppAccess scope
+  class User auth
+  class UserCompanyAssignment auth
+  class AuditLog audit

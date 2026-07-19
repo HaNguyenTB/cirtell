@@ -1,0 +1,130 @@
+classDiagram
+  direction LR
+
+  class Project {
+    +string id
+    +string name
+    +string status
+    +string sourceWarehouseId
+    +date startDate
+    +date endDate
+    +string companyId
+  }
+
+  class ProjectEquipment {
+    +string id
+    +string projectId
+    +string partId
+    +string itemName
+    +number quantity
+    +string condition
+    +number co2AvoidedKg
+  }
+
+  class WorkflowStage {
+    +string id
+    +string projectId
+    +string stage
+    +string label
+    +string status
+    +number sortOrder
+  }
+
+  class WorkflowTask {
+    +string id
+    +string projectId
+    +string stageId
+    +string title
+    +string status
+    +date dueDate
+  }
+
+  class ProjectFinancial {
+    +string id
+    +string projectId
+    +string type
+    +string category
+    +number amount
+    +string currency
+  }
+
+  class ProjectLogistics {
+    +string id
+    +string projectId
+    +string shipmentType
+    +string status
+    +string carrier
+    +date scheduledDate
+  }
+
+  class ProjectEvidence {
+    +string id
+    +string projectId
+    +string title
+    +string evidenceType
+    +string r2Key
+    +string contentType
+  }
+
+  class ProjectActivity {
+    +string id
+    +string projectId
+    +string action
+    +string entityType
+    +string entityId
+    +datetime createdAt
+  }
+
+  class GhgEmissionEntry {
+    +string id
+    +number scope
+    +string sourceType
+    +string transactionId
+    +string partId
+    +number co2eKg
+    +calculateCo2e()
+  }
+
+  class Transaction {
+    +string id
+    +date date
+    +string movementType
+    +string inventorySyncStatus
+  }
+
+  class Part {
+    +string id
+    +string partNumber
+    +string modelName
+    +number emissionFactorKg
+  }
+
+  Project "1" --> "0..N" ProjectEquipment
+  Project "1" --> "0..N" WorkflowStage
+  WorkflowStage "1" --> "0..N" WorkflowTask
+  Project "1" --> "0..N" ProjectFinancial
+  Project "1" --> "0..N" ProjectLogistics
+  Project "1" --> "0..N" ProjectEvidence
+  Project "1" --> "0..N" ProjectActivity
+  GhgEmissionEntry "0..N" --> Transaction : source transaction
+  GhgEmissionEntry "0..N" --> Part : emission factor
+  ProjectEquipment "0..N" --> Part : optional part link
+
+  note for GhgEmissionEntry "manual entries calculate actual CO2e; transaction entries may represent avoided emissions"
+  note for ProjectEvidence "binary files live in R2, D1 stores metadata"
+
+  classDef project fill:#ecfdf5,stroke:#047857,color:#064e3b
+  classDef support fill:#f8fafc,stroke:#475569,color:#0f172a
+  classDef carbon fill:#fefce8,stroke:#ca8a04,color:#713f12
+  classDef external fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
+  class Project project
+  class ProjectEquipment project
+  class WorkflowStage project
+  class WorkflowTask project
+  class ProjectFinancial support
+  class ProjectLogistics support
+  class ProjectEvidence support
+  class ProjectActivity support
+  class GhgEmissionEntry carbon
+  class Transaction external
+  class Part external

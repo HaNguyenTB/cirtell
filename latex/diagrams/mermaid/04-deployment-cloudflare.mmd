@@ -1,0 +1,53 @@
+flowchart LR
+  subgraph Runtime["User Runtime"]
+    Browser["Browser"]
+  end
+
+  subgraph Cloudflare["Cloudflare Platform"]
+    Pages["Cloudflare Pages<br/>static SPA + CDN<br/>_headers CSP"]
+    Worker["Cloudflare Workers<br/>cirtell-api<br/>Hono REST API"]
+    D1["Cloudflare D1<br/>cirtell-db"]
+    R2["R2 Bucket<br/>cirtell-evidence"]
+    Env["Workers secrets/env<br/>GOOGLE_CLIENT_ID<br/>JWT_SECRET<br/>FRONTEND_URL<br/>CORS_ALLOWED_ORIGINS"]
+  end
+
+  subgraph Identity["External Identity"]
+    Google["Google Identity / JWKS"]
+  end
+
+  subgraph Deploy["Deployment Pipeline"]
+    Dev["Developer"]
+    GitHub["GitHub repository"]
+    Build["npm build frontend"]
+    Wrangler["Wrangler CLI"]
+    Mig["wrangler d1 migrations apply"]
+  end
+
+  Browser -->|"load SPA"| Pages
+  Browser -->|"API requests"| Worker
+  Worker -->|"SQL"| D1
+  Worker -->|"project evidence"| R2
+  Worker -->|"token verification"| Google
+  Worker -->|"reads config"| Env
+
+  Dev -.->|"push / PR"| GitHub
+  GitHub -.-> Build
+  Build -.->|"deploy static assets"| Pages
+  Dev -.->|"wrangler deploy worker"| Wrangler
+  Wrangler -.-> Worker
+  Wrangler -.->|"apply migrations"| Mig
+  Mig -.-> D1
+
+  classDef runtime fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63;
+  classDef cloud fill:#eff6ff,stroke:#2563eb,stroke-width:1px,color:#1e3a8a;
+  classDef data fill:#ecfdf5,stroke:#059669,stroke-width:1px,color:#064e3b;
+  classDef external fill:#fff7ed,stroke:#c2410c,stroke-width:1px,color:#7c2d12;
+  classDef deploy fill:#f8fafc,stroke:#64748b,stroke-dasharray: 5 4,color:#0f172a;
+  classDef secret fill:#f5f3ff,stroke:#7c3aed,stroke-width:1px,color:#4c1d95;
+
+  class Browser runtime;
+  class Pages,Worker cloud;
+  class D1,R2 data;
+  class Google external;
+  class Dev,GitHub,Build,Wrangler,Mig deploy;
+  class Env secret;
