@@ -18,7 +18,6 @@ import {
   Cpu,
   DollarSign,
   Download,
-  Eye,
   FolderKanban,
   Loader2,
   Package,
@@ -431,19 +430,6 @@ async function fetchTransactionPO(transaction: EnrichedTxn): Promise<{ blob: Blo
   };
 }
 
-async function viewTransactionPO(transaction: EnrichedTxn): Promise<void> {
-  const { blob } = await fetchTransactionPO(transaction);
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
 async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
   const { blob, fileName } = await fetchTransactionPO(transaction);
   const url = URL.createObjectURL(blob);
@@ -556,6 +542,7 @@ export function TransactionsPage() {
   const [expandedItems, setExpandedItems] = useState<TransactionItemDetail[]>([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
   const [uploadingPO, setUploadingPO] = useState<string | null>(null);
+  const [deletingPO, setDeletingPO] = useState<string | null>(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTxn, setEditingTxn] = useState<EnrichedTxn | null>(null);
@@ -682,13 +669,21 @@ export function TransactionsPage() {
     }
   }, [showNotice]);
 
-  const handlePOView = useCallback(async (transaction: EnrichedTxn) => {
+  const handlePODelete = useCallback(async (transaction: EnrichedTxn) => {
+    const fileName = transaction.poFileName || transaction.poNumber || 'this PO file';
+    if (!window.confirm(`Delete ${fileName}? This removes the uploaded file and clears the PO number.`)) return;
+
+    setDeletingPO(transaction.id);
     try {
-      await viewTransactionPO(transaction);
+      await apiRequest(`/api/transactions/${transaction.id}/po`, { method: 'DELETE' });
+      showNotice('success', 'PO file deleted');
+      refreshTransactions();
     } catch (error) {
-      showNotice('error', getErrorMessage(error, 'Failed to open PO file'));
+      showNotice('error', getErrorMessage(error, 'Failed to delete PO file'));
+    } finally {
+      setDeletingPO(null);
     }
-  }, [showNotice]);
+  }, [refreshTransactions, showNotice]);
 
   const handlePOUpload = useCallback(async (transactionId: string, file: File) => {
     setUploadingPO(transactionId);
@@ -782,6 +777,7 @@ export function TransactionsPage() {
         expandedItems={expandedItems}
         expandedLoading={expandedLoading}
         uploadingPO={uploadingPO}
+        deletingPO={deletingPO}
         canEdit={canEdit}
         canDelete={canDelete}
         currentPage={currentPage}
@@ -791,7 +787,7 @@ export function TransactionsPage() {
         setCurrentPage={setCurrentPage}
         setPageSize={setPageSize}
         onToggleExpand={toggleExpandTxn}
-        onPOView={handlePOView}
+        onPODelete={handlePODelete}
         onPODownload={handlePODownload}
         onPOUpload={handlePOUpload}
         onEdit={setEditingTxn}
@@ -958,6 +954,7 @@ interface TransactionsTableProps {
   expandedItems: TransactionItemDetail[];
   expandedLoading: boolean;
   uploadingPO: string | null;
+  deletingPO: string | null;
   canEdit: boolean;
   canDelete: boolean;
   currentPage: number;
@@ -967,7 +964,7 @@ interface TransactionsTableProps {
   setCurrentPage: Dispatch<SetStateAction<number>>;
   setPageSize: Dispatch<SetStateAction<number>>;
   onToggleExpand: (transactionId: string) => void;
-  onPOView: (transaction: EnrichedTxn) => void;
+  onPODelete: (transaction: EnrichedTxn) => void;
   onPODownload: (transaction: EnrichedTxn) => void;
   onPOUpload: (transactionId: string, file: File) => void;
   onEdit: (transaction: EnrichedTxn) => void;
@@ -982,6 +979,7 @@ function TransactionsTable({
   expandedItems,
   expandedLoading,
   uploadingPO,
+  deletingPO,
   canEdit,
   canDelete,
   currentPage,
@@ -991,7 +989,7 @@ function TransactionsTable({
   setCurrentPage,
   setPageSize,
   onToggleExpand,
-  onPOView,
+  onPODelete,
   onPODownload,
   onPOUpload,
   onEdit,
@@ -1127,39 +1125,48 @@ function TransactionsTable({
                         <div className="inline-flex items-center justify-center gap-1">
                           <button
                             type="button"
-                            onClick={() => onPOView(transaction)}
-                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:bg-signal-teal/10 hover:text-signal-teal/80"
-                            title={`View ${transaction.poFileName || 'PO'}`}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            View
-                          </button>
-                          <button
-                            type="button"
                             onClick={() => onPODownload(transaction)}
-                            className="rounded p-1 text-gray-400 transition-colors hover:bg-signal-teal/10 hover:text-signal-teal"
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:bg-signal-teal/10 hover:text-signal-teal/80"
                             title={`Download ${transaction.poFileName || 'PO'}`}
                           >
                             <Download className="h-3.5 w-3.5" />
+                            Download
                           </button>
                           {canEdit && (
-                            <label className="inline-flex cursor-pointer items-center rounded p-1 text-gray-400 transition-colors hover:bg-signal-teal/15 hover:text-signal-teal" title="Replace PO">
-                              {uploadingPO === transaction.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Upload className="h-3.5 w-3.5" />
-                              )}
-                              <input
-                                type="file"
-                                className="hidden"
-                                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0];
-                                  if (file) onPOUpload(transaction.id, file);
-                                  event.target.value = '';
-                                }}
-                              />
-                            </label>
+                            <>
+                              <label className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-micro font-medium text-gray-500 transition-colors hover:bg-signal-teal/15 hover:text-signal-teal" title="Replace PO">
+                                {uploadingPO === transaction.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Upload className="h-3.5 w-3.5" />
+                                )}
+                                Replace
+                                <input
+                                  type="file"
+                                  className="hidden"
+                                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    if (file) onPOUpload(transaction.id, file);
+                                    event.target.value = '';
+                                  }}
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => onPODelete(transaction)}
+                                disabled={deletingPO === transaction.id}
+                                className="inline-flex items-center gap-1 rounded px-2 py-1 text-micro font-medium text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Delete PO"
+                              >
+                                {deletingPO === transaction.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                )}
+                                Delete
+                              </button>
+                            </>
                           )}
                         </div>
                       ) : canEdit ? (

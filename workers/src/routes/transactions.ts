@@ -1386,9 +1386,9 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
       `).bind(id, fileName, contentType, fileData, user.id, now),
       c.env.DB.prepare(`
         UPDATE transactions
-        SET po_file_key = ?, po_file_name = ?, updated_at = ?
+        SET po_file_key = ?, po_file_name = ?, po_number = ?, updated_at = ?
         WHERE id = ? AND ${scopeWhere.clause}
-      `).bind(poFileKey, fileName, now, id, ...scopeWhere.params),
+      `).bind(poFileKey, fileName, fileName, now, id, ...scopeWhere.params),
     ]);
 
     const replacedExistingFile = Boolean(existingFile);
@@ -1427,6 +1427,48 @@ transactionsRoutes.post('/:id/po-upload', requirePermission(Permission.EDIT_TRAN
     }
     console.error('POST /transactions/:id/po-upload error:', err);
     return c.json({ success: false, error: 'Failed to upload PO file' }, 500);
+  }
+});
+
+// ============================================================================
+// DELETE /api/transactions/:id/po
+// ============================================================================
+transactionsRoutes.delete('/:id/po', requirePermission(Permission.EDIT_TRANSACTIONS), async (c) => {
+  try {
+    const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const id = c.req.param('id')!;
+    const existing = await c.env.DB.prepare(`
+      SELECT id, tenant_id, company_id, po_file_name
+      FROM transactions
+      WHERE id = ? AND ${scopeWhere.clause}
+    `).bind(id, ...scopeWhere.params).first<{
+      id: string; tenant_id: string | null; company_id: string | null; po_file_name: string | null;
+    }>();
+    if (!existing) return c.json({ success: false, error: 'Transaction not found', code: 'TRANSACTION_NOT_FOUND' }, 404);
+
+    const existingFile = await c.env.DB.prepare(
+      'SELECT transaction_id FROM transaction_po_files WHERE transaction_id = ?',
+    ).bind(id).first<{ transaction_id: string }>();
+    if (!existingFile) return c.json({ success: false, error: 'Purchase order file not found', code: 'PO_FILE_NOT_FOUND' }, 404);
+
+    const now = new Date().toISOString();
+    await c.env.DB.batch([
+      c.env.DB.prepare('DELETE FROM transaction_po_files WHERE transaction_id = ?').bind(id),
+      c.env.DB.prepare(`
+        UPDATE transactions
+        SET po_file_key = NULL, po_file_name = NULL, po_number = NULL, updated_at = ?
+        WHERE id = ? AND ${scopeWhere.clause}
+      `).bind(now, id, ...scopeWhere.params),
+    ]);
+    await logAudit(c.env.DB, user.id, 'DELETE_TRANSACTION_PO', 'transaction', id,
+      auditDetails({ fileName: existing.po_file_name }),
+      existing.tenant_id ?? scope.tenantId, existing.company_id ?? scope.companyId);
+    return c.json({ success: true, data: { transactionId: id, deleted: true } });
+  } catch (err) {
+    console.error('DELETE /transactions/:id/po error:', err);
+    return c.json({ success: false, error: 'Failed to delete PO file' }, 500);
   }
 });
 

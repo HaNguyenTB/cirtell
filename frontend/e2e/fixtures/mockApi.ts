@@ -159,6 +159,7 @@ export interface MockState {
     partCreates: unknown[];
     transactionCreates: unknown[];
     poUploads: Array<{ url: string; fileName: string | null; contentType: string | null }>;
+    poDeletes: string[];
     inventoryMoves: unknown[];
     zoneCreates: unknown[];
     ghgCreates: unknown[];
@@ -467,6 +468,7 @@ export function createMockState(): MockState {
       partCreates: [],
       transactionCreates: [],
       poUploads: [],
+      poDeletes: [],
       inventoryMoves: [],
       zoneCreates: [],
       ghgCreates: [],
@@ -890,6 +892,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     if (transaction) {
       transaction.poFileKey = 'd1:' + transaction.id;
       transaction.poFileName = fileName || 'mock-po.pdf';
+      transaction.poNumber = transaction.poFileName;
     }
     await respond(route, {
       success: true,
@@ -899,6 +902,21 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
         contentType: contentType || 'application/pdf',
         sizeBytes: formData.byteLength,
       },
+    });
+    return;
+  }
+
+  if (/^\/api\/transactions\/[^/]+\/po$/.test(path) && method === 'DELETE') {
+    state.requests.poDeletes.push(path);
+    const transaction = state.transactions.find((item) => item.id === path.split('/')[3]);
+    if (transaction) {
+      transaction.poNumber = null;
+      transaction.poFileKey = null;
+      transaction.poFileName = null;
+    }
+    await respond(route, {
+      success: true,
+      data: { transactionId: path.split('/')[3], deleted: true },
     });
     return;
   }

@@ -223,10 +223,19 @@ test('user can create a transaction and upload a purchase order', async ({ page 
 
   await expect(page.getByText('$450.00', { exact: true })).toBeVisible();
   const createdRow = page.getByRole('row').filter({ hasText: '$450.00' });
-  await expect(createdRow.getByRole('button', { name: /View/i })).toBeVisible();
-  await createdRow.getByRole('button', { name: /View/i }).click();
+  await expect(createdRow).toContainText('PO: sample-po.pdf');
+  await expect(createdRow.getByRole('button', { name: /View/i })).toHaveCount(0);
+
+  await createdRow.getByRole('button', { name: 'Download' }).click();
   await expect.poll(() => poDownloads.length).toBe(1);
-  await expect(createdRow.getByTitle(/Download sample-po\.pdf/i)).toBeVisible();
+  await expect(createdRow.getByTitle('Replace PO')).toBeVisible();
+  await expect(createdRow.getByTitle('Delete PO')).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await createdRow.getByTitle('Delete PO').click();
+  await expect.poll(() => state.requests.poDeletes.length).toBe(1);
+  await expect(createdRow).not.toContainText('sample-po.pdf');
+  await expect(createdRow.getByTitle('Upload PO')).toBeVisible();
   await expectNoPageErrors(pageErrors);
 });
 

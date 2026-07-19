@@ -290,6 +290,7 @@ describe('backend route integration coverage', () => {
       file_hex: string;
       po_file_name: string;
       po_file_key: string;
+      po_number: string;
       row_count: number;
     }>(`
       SELECT
@@ -298,6 +299,7 @@ describe('backend route integration coverage', () => {
         hex(pf.file_data) AS file_hex,
         t.po_file_name,
         t.po_file_key,
+        t.po_number,
         (SELECT COUNT(*) FROM transaction_po_files WHERE transaction_id = ?) AS row_count
       FROM transaction_po_files pf
       JOIN transactions t ON t.id = pf.transaction_id
@@ -309,6 +311,7 @@ describe('backend route integration coverage', () => {
       file_hex: '255044462D312E37',
       po_file_name: 'route-po.pdf',
       po_file_key: 'd1:tx_a_existing',
+      po_number: 'route-po.pdf',
       row_count: 1,
     });
 
@@ -328,6 +331,48 @@ describe('backend route integration coverage', () => {
       sizeBytes: bytes.byteLength,
       replacedExistingFile: true,
     });
+  });
+
+  it('deletes a purchase order file within scope and clears transaction metadata', async () => {
+    const deleted = await apiRequest('DELETE', '/api/transactions/tx_a_existing/po', {
+      token: seeded.tokens.adminA,
+    });
+
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.json).toMatchObject({
+      success: true,
+      data: { transactionId: 'tx_a_existing', deleted: true },
+    });
+
+    const transaction = await first<{
+      po_number: string | null;
+      po_file_name: string | null;
+      po_file_key: string | null;
+      file_count: number;
+    }>(`
+      SELECT po_number, po_file_name, po_file_key,
+        (SELECT COUNT(*) FROM transaction_po_files WHERE transaction_id = ?) AS file_count
+      FROM transactions
+      WHERE id = ?
+    `, 'tx_a_existing', 'tx_a_existing');
+    expect(transaction).toEqual({
+      po_number: null,
+      po_file_name: null,
+      po_file_key: null,
+      file_count: 0,
+    });
+
+    const audit = await first<{ details: string }>(`
+      SELECT details FROM audit_log
+      WHERE action = 'DELETE_TRANSACTION_PO' AND resource_id = ?
+    `, 'tx_a_existing');
+    expect(JSON.parse(audit?.details || '{}')).toEqual({ fileName: 'po-a.pdf' });
+
+    const download = await apiRequest('GET', '/api/transactions/tx_a_existing/po-download', {
+      token: seeded.tokens.viewerA,
+    });
+    expect(download.response.status).toBe(404);
+    expect(download.json?.code).toBe('PO_FILE_NOT_FOUND');
   });
 
   it('downloads a purchase order file within scope with binary headers and bytes', async () => {
