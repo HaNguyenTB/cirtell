@@ -901,6 +901,67 @@ describe('warehouse inventory movement validation', () => {
     expect(report.json.avoided.total_co2e_kg).toBe(0);
   });
 
+  it('reconciles missing transaction carbon across the scoped dataset idempotently', async () => {
+    const transactionId = await createTransaction({
+      date: '2026-07-18',
+      movement_type: 'Purchase',
+      part_id: 'part_router',
+      quantity: 3,
+      destination_warehouse_id: 'wh_source',
+    });
+
+    await run('DELETE FROM ghg_emission_entries WHERE transaction_id = ?', transactionId);
+
+    const firstSync = await api('POST', '/api/ghg/transaction-emissions/sync', {});
+    expect(firstSync.response.status).toBe(200);
+    expect(firstSync.json.data).toEqual(expect.objectContaining({
+      transactionsScanned: 1,
+      rebuiltTransactions: 1,
+      unchangedTransactions: 0,
+      invalidatedEntries: 0,
+      generatedEntries: 1,
+      actualCo2eKg: 37.5,
+      avoidedCo2eKg: 0,
+    }));
+
+    const generated = await first<{
+      reporting_period_start: string;
+      source_type: string;
+      emission_kind: string;
+      co2e_kg: number;
+    }>(`
+      SELECT reporting_period_start, source_type, emission_kind, co2e_kg
+      FROM ghg_emission_entries
+      WHERE transaction_id = ? AND is_active = 1
+    `, transactionId);
+    expect(generated).toEqual({
+      reporting_period_start: '2026-07-18',
+      source_type: 'transaction',
+      emission_kind: 'actual',
+      co2e_kg: 37.5,
+    });
+
+    const secondSync = await api('POST', '/api/ghg/transaction-emissions/sync', {});
+    expect(secondSync.response.status).toBe(200);
+    expect(secondSync.json.data).toEqual(expect.objectContaining({
+      transactionsScanned: 1,
+      rebuiltTransactions: 0,
+      unchangedTransactions: 1,
+      generatedEntries: 0,
+    }));
+    expect((await first<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM ghg_emission_entries WHERE transaction_id = ? AND is_active = 1',
+      transactionId,
+    ))?.count).toBe(1);
+
+    const entries = await api('GET', '/api/ghg/entries');
+    expect(entries.response.status).toBe(200);
+    expect(entries.json.data[0]).toEqual(expect.objectContaining({
+      transaction_id: transactionId,
+      part_number: 'RTR-100',
+      reporting_period_start: '2026-07-18',
+    }));
+  });
 });
 
 interface BackfillResult {

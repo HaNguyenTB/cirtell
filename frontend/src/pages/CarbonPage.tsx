@@ -20,6 +20,8 @@ interface GhgEntry {
   created_by_name: string | null;
   source_type: 'manual' | 'transaction' | 'warehouse' | 'project';
   emission_kind: 'actual' | 'avoided';
+  transaction_movement_type: string | null;
+  part_number: string | null;
 }
 
 interface Scope3Cat {
@@ -61,11 +63,13 @@ interface GhgReport {
   };
 }
 
-interface AvoidedSyncResult {
-  created: number;
-  updated: number;
-  alreadyExisting: number;
-  skippedMissingFactor: number;
+interface TransactionCarbonSyncResult {
+  transactionsScanned: number;
+  rebuiltTransactions: number;
+  unchangedTransactions: number;
+  invalidatedEntries: number;
+  generatedEntries: number;
+  actualCo2eKg: number;
   avoidedCo2eKg: number;
   warnings: Array<{ transactionId: string; partId: string | null; partNumber?: string | null; code: string }>;
 }
@@ -113,7 +117,7 @@ export function CarbonPage() {
   const [syncStart, setSyncStart] = useState('');
   const [syncEnd, setSyncEnd] = useState('');
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<AvoidedSyncResult | null>(null);
+  const [syncResult, setSyncResult] = useState<TransactionCarbonSyncResult | null>(null);
 
   const fetchEntries = useCallback(async () => {
     setLoading(true);
@@ -198,12 +202,12 @@ export function CarbonPage() {
     }
   }
 
-  async function handleSyncAvoided() {
+  async function handleSyncTransactionCarbon() {
     setSyncing(true);
     setError('');
     setSyncResult(null);
     try {
-      const res = await apiRequest<{ success: boolean; data: AvoidedSyncResult }>('/api/ghg/avoided-emissions/sync', {
+      const res = await apiRequest<{ success: boolean; data: TransactionCarbonSyncResult }>('/api/ghg/transaction-emissions/sync', {
         method: 'POST',
         body: {
           period_start: syncStart || undefined,
@@ -215,7 +219,7 @@ export function CarbonPage() {
       fetchReport();
       fetchEntries();
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to sync avoided emissions'));
+      setError(getErrorMessage(err, 'Failed to sync transaction carbon'));
     } finally {
       setSyncing(false);
     }
@@ -307,8 +311,8 @@ export function CarbonPage() {
             <div className="stat-card p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Sync avoided emissions</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Uses Redeploy and Recycle transactions</p>
+                  <h2 className="text-sm font-semibold text-gray-900">Sync transaction carbon</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Reconciles Purchase, Redeploy, and Recycle</p>
                 </div>
                 <RefreshCw size={16} className="text-verified-green" />
               </div>
@@ -330,26 +334,21 @@ export function CarbonPage() {
               </div>
               <button
                 type="button"
-                onClick={handleSyncAvoided}
+                onClick={handleSyncTransactionCarbon}
                 disabled={syncing}
                 className="btn-primary w-full justify-center"
               >
                 <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
-                {syncing ? 'Syncing...' : 'Sync avoided emissions'}
+                {syncing ? 'Syncing...' : 'Sync transaction carbon'}
               </button>
               {syncResult && (
                 <div className="mt-4 text-xs text-gray-500 space-y-1">
                   <p>
-                    Created {syncResult.created}, updated {syncResult.updated}, existing {syncResult.alreadyExisting}
+                    Scanned {syncResult.transactionsScanned}, rebuilt {syncResult.rebuiltTransactions}, unchanged {syncResult.unchangedTransactions}
                   </p>
                   <p>
-                    Avoided {syncResult.avoidedCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO2e
+                    Generated {syncResult.generatedEntries} entries: {syncResult.actualCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg actual and {syncResult.avoidedCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg avoided
                   </p>
-                  {syncResult.skippedMissingFactor > 0 && (
-                    <p className="text-signal-teal">
-                      {syncResult.skippedMissingFactor} skipped because emission factors are missing.
-                    </p>
-                  )}
                   {syncResult.warnings.length > 0 && (
                     <p className="text-gray-400">
                       First warning: {syncResult.warnings[0].code} on {syncResult.warnings[0].partNumber || syncResult.warnings[0].partId || 'unknown part'}
@@ -416,7 +415,15 @@ export function CarbonPage() {
                         {scopeLabel(e.scope)}
                       </span>
                     </td>
-                    <td className="px-4 py-3.5 text-gray-900 max-w-xs truncate">{e.source_description}</td>
+                    <td className="px-4 py-3.5 text-gray-900 max-w-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">{e.source_description}</span>
+                        <span className="badge bg-deep-teal/10 text-deep-teal shrink-0">
+                          {e.source_type === 'transaction' ? e.transaction_movement_type || 'Transaction' : 'Manual'}
+                        </span>
+                      </div>
+                      {e.part_number && <p className="text-xs text-gray-400 mt-1">Part {e.part_number}</p>}
+                    </td>
                     <td className="px-4 py-3.5 text-right text-gray-500 tabular-nums">{e.activity_data} {e.activity_unit}</td>
                     <td className="px-4 py-3.5 text-right text-gray-500 tabular-nums">{e.emission_factor}</td>
                     <td className="px-4 py-3.5 text-right font-semibold text-gray-900 tabular-nums">{e.co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>

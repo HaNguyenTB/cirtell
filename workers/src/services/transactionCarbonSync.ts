@@ -67,7 +67,7 @@ export async function prepareTransactionCarbonBatch(
   db: D1Database,
   input: TransactionCarbonInput,
   ownership: ScopeValues,
-  invalidationReason: 'create' | 'update' | 'void',
+  invalidationReason: 'create' | 'update' | 'void' | 'reconcile',
 ): Promise<PreparedTransactionCarbonBatch> {
   const scoped = scopeClause(ownership);
   const statements: D1PreparedStatement[] = [
