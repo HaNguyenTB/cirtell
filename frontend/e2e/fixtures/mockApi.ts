@@ -43,6 +43,8 @@ interface MockTransaction {
   category: string | null;
   condition: string | null;
   poNumber: string | null;
+  poFileKey?: string | null;
+  poFileName?: string | null;
   projectId: string | null;
   projectName: string | null;
   destinationWarehouseId: string | null;
@@ -821,6 +823,11 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     const fileName = /filename="([^"]+)"/.exec(raw)?.[1] || null;
     const contentType = /Content-Type: ([^\r\n]+)/.exec(raw)?.[1] || null;
     state.requests.poUploads.push({ url: path, fileName, contentType });
+    const transaction = state.transactions.find((item) => item.id === path.split('/')[3]);
+    if (transaction) {
+      transaction.poFileKey = 'd1:' + transaction.id;
+      transaction.poFileName = fileName || 'mock-po.pdf';
+    }
     await respond(route, {
       success: true,
       data: {
@@ -834,7 +841,17 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
   }
 
   if (/^\/api\/transactions\/[^/]+\/po-download$/.test(path)) {
-    await respond(route, { success: true, file_name: 'mock-po.pdf' });
+    const origin = request.headers().origin || 'http://127.0.0.1:4173';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      headers: {
+        ...corsHeaders,
+        'access-control-allow-origin': origin,
+        'content-disposition': 'attachment; filename="mock-po.pdf"',
+      },
+      body: '%PDF-1.4\n% mock purchase order\n',
+    });
     return;
   }
 

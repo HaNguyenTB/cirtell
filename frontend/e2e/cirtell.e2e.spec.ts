@@ -188,6 +188,12 @@ test('admin can create a scoped part', async ({ page }) => {
 
 test('user can create a transaction and upload a purchase order', async ({ page }) => {
   const { state, pageErrors } = await setupApp(page, { role: 'User', isSuperAdmin: false });
+  const poDownloads: string[] = [];
+  page.on('request', (request) => {
+    if (/\/api\/transactions\/[^/]+\/po-download$/.test(new URL(request.url()).pathname)) {
+      poDownloads.push(request.url());
+    }
+  });
 
   await page.goto('/transactions');
   await createPurchaseWithPo(page, state);
@@ -213,6 +219,11 @@ test('user can create a transaction and upload a purchase order', async ({ page 
   });
 
   await expect(page.getByText('$450.00', { exact: true })).toBeVisible();
+  const createdRow = page.getByRole('row').filter({ hasText: '$450.00' });
+  await expect(createdRow.getByRole('button', { name: /View/i })).toBeVisible();
+  await createdRow.getByRole('button', { name: /View/i }).click();
+  await expect.poll(() => poDownloads.length).toBe(1);
+  await expect(createdRow.getByTitle(/Download sample-po\.pdf/i)).toBeVisible();
   await expectNoPageErrors(pageErrors);
 });
 

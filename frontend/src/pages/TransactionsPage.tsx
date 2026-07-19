@@ -17,7 +17,7 @@ import {
   Cpu,
   DollarSign,
   Download,
-  FileText,
+  Eye,
   FolderKanban,
   Loader2,
   Package,
@@ -409,7 +409,7 @@ async function uploadTransactionPO(transactionId: string, file: File): Promise<v
   if (!response.ok) throw new Error(await readApiError(response));
 }
 
-async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
+async function fetchTransactionPO(transaction: EnrichedTxn): Promise<{ blob: Blob; fileName: string }> {
   const token = getToken();
   const headers: HeadersInit = {};
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -420,13 +420,33 @@ async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
   });
   if (!response.ok) throw new Error(await readApiError(response));
 
-  const blob = await response.blob();
+  return {
+    blob: await response.blob(),
+    fileName: fileNameFromContentDisposition(response.headers.get('Content-Disposition'))
+      || transaction.poFileName
+      || 'purchase-order',
+  };
+}
+
+async function viewTransactionPO(transaction: EnrichedTxn): Promise<void> {
+  const { blob } = await fetchTransactionPO(transaction);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = fileNameFromContentDisposition(response.headers.get('Content-Disposition'))
-    || transaction.poFileName
-    || 'purchase-order';
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function downloadTransactionPO(transaction: EnrichedTxn): Promise<void> {
+  const { blob, fileName } = await fetchTransactionPO(transaction);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -659,6 +679,14 @@ export function TransactionsPage() {
     }
   }, [showNotice]);
 
+  const handlePOView = useCallback(async (transaction: EnrichedTxn) => {
+    try {
+      await viewTransactionPO(transaction);
+    } catch (error) {
+      showNotice('error', getErrorMessage(error, 'Failed to open PO file'));
+    }
+  }, [showNotice]);
+
   const handlePOUpload = useCallback(async (transactionId: string, file: File) => {
     setUploadingPO(transactionId);
     try {
@@ -760,6 +788,7 @@ export function TransactionsPage() {
         setCurrentPage={setCurrentPage}
         setPageSize={setPageSize}
         onToggleExpand={toggleExpandTxn}
+        onPOView={handlePOView}
         onPODownload={handlePODownload}
         onPOUpload={handlePOUpload}
         onEdit={setEditingTxn}
@@ -935,6 +964,7 @@ interface TransactionsTableProps {
   setCurrentPage: Dispatch<SetStateAction<number>>;
   setPageSize: Dispatch<SetStateAction<number>>;
   onToggleExpand: (transactionId: string) => void;
+  onPOView: (transaction: EnrichedTxn) => void;
   onPODownload: (transaction: EnrichedTxn) => void;
   onPOUpload: (transactionId: string, file: File) => void;
   onEdit: (transaction: EnrichedTxn) => void;
@@ -958,6 +988,7 @@ function TransactionsTable({
   setCurrentPage,
   setPageSize,
   onToggleExpand,
+  onPOView,
   onPODownload,
   onPOUpload,
   onEdit,
@@ -1085,15 +1116,24 @@ function TransactionsTable({
                       {formatCurrency(transaction.totalValue)}
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-center">
-                      {transaction.poFileKey ? (
+                      {transaction.poFileKey || transaction.poFileName ? (
                         <div className="inline-flex items-center justify-center gap-1">
                           <button
+                            type="button"
+                            onClick={() => onPOView(transaction)}
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:bg-signal-teal/10 hover:text-signal-teal/80"
+                            title={`View ${transaction.poFileName || 'PO'}`}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => onPODownload(transaction)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-micro font-medium text-signal-teal transition-colors hover:text-signal-teal/80"
+                            className="rounded p-1 text-gray-400 transition-colors hover:bg-signal-teal/10 hover:text-signal-teal"
                             title={`Download ${transaction.poFileName || 'PO'}`}
                           >
-                            <FileText className="h-3.5 w-3.5" />
-                            View
+                            <Download className="h-3.5 w-3.5" />
                           </button>
                           {canEdit && (
                             <label className="inline-flex cursor-pointer items-center rounded p-1 text-gray-400 transition-colors hover:bg-signal-teal/15 hover:text-signal-teal" title="Replace PO">
