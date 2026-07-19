@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
+  BarChart3,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
   FileText,
   FolderKanban,
   GitBranch,
+  Leaf,
   Loader2,
   MapPin,
   MessageSquare,
@@ -32,6 +34,20 @@ import {
 } from 'lucide-react';
 import { API_URL, apiRequest } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 type ProjectStatus = 'draft' | 'assessment' | 'in-progress' | 'on-hold' | 'completed' | 'cancelled';
 type WorkflowStatus = 'not_started' | 'in_progress' | 'completed' | 'blocked';
@@ -2587,56 +2603,353 @@ function CommentsTab({ bundle, onRefresh }: { bundle: ProjectBundle; onRefresh: 
   );
 }
 
+const REPORT_COLORS = ['#0f766e', '#10b981', '#2dd4bf', '#115e59', '#6ee7b7', '#64748b'];
+const REPORT_TOOLTIP_STYLE = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  backgroundColor: '#ffffff',
+  boxShadow: '0 8px 24px rgba(15, 23, 42, 0.08)',
+  fontSize: 12,
+};
+
+function reportLabel(value?: string | null) {
+  if (!value) return 'Unspecified';
+  return value
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function shortReportLabel(value: string, max = 17) {
+  return value.length > max ? value.slice(0, max - 3) + '...' : value;
+}
+
+function ReportChart({
+  title,
+  subtitle,
+  empty,
+  children,
+  className = '',
+}: {
+  title: string;
+  subtitle: string;
+  empty: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={'min-w-0 rounded-apple-lg border border-gray-100 bg-white p-5 ' + className}>
+      <div className="mb-5">
+        <h3 className="text-caption font-semibold text-gray-900">{title}</h3>
+        <p className="mt-0.5 text-micro text-gray-500">{subtitle}</p>
+      </div>
+      {empty ? (
+        <div className="flex h-[260px] items-center justify-center rounded-apple bg-gray-50 text-caption text-gray-400">
+          No report data yet
+        </div>
+      ) : children}
+    </section>
+  );
+}
+
 function ReportsTab({ bundle }: { bundle: ProjectBundle }) {
   const project = bundle.project;
+  const currency = project.currency || 'USD';
   const materialKpis = projectMaterialKpis(bundle);
   const financialTotals = projectFinancialTotals(bundle);
+  const equipmentRows = useMemo(() => projectMaterialRows(bundle), [bundle]);
+
+  const stageData = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const item of equipmentRows) {
+      const label = reportLabel(item.current_stage);
+      totals.set(label, (totals.get(label) || 0) + Number(item.quantity || 0));
+    }
+    return [...totals.entries()]
+      .map(([fullName, units]) => ({ name: shortReportLabel(fullName), fullName, units }))
+      .sort((left, right) => right.units - left.units);
+  }, [equipmentRows]);
+
+  const conditionData = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const item of equipmentRows) {
+      const label = reportLabel(item.condition);
+      totals.set(label, (totals.get(label) || 0) + Number(item.quantity || 0));
+    }
+    return [...totals.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((left, right) => right.value - left.value);
+  }, [equipmentRows]);
+
+  const financialData = useMemo(() => {
+    const totals = { revenue: 0, credit: 0, cost: 0 };
+    for (const row of financialTotals.rows) {
+      totals[row.type] += Number(row.amount || 0);
+    }
+    return [
+      { name: 'Revenue', value: totals.revenue, fill: REPORT_COLORS[0] },
+      { name: 'Credits', value: totals.credit, fill: REPORT_COLORS[1] },
+      { name: 'Costs', value: totals.cost, fill: REPORT_COLORS[5] },
+    ];
+  }, [financialTotals.rows]);
+
+  const workflowData = useMemo(() => bundle.stages.map((stage) => {
+    const tasks = bundle.tasks.filter((task) => task.stage_id === stage.id);
+    const completedTasks = tasks.filter((task) => task.status === 'done').length;
+    const fallbackProgress = stage.status === 'completed' ? 100 : stage.status === 'in_progress' ? 50 : 0;
+    return {
+      name: shortReportLabel(stage.label || reportLabel(stage.stage), 19),
+      fullName: stage.label || reportLabel(stage.stage),
+      progress: tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : fallbackProgress,
+      tasks: tasks.length,
+    };
+  }), [bundle.stages, bundle.tasks]);
+
+  const impactData = useMemo(() => {
+    const totals = new Map<string, { units: number; avoided: number; reuse: number }>();
+    for (const item of equipmentRows) {
+      const category = reportLabel(item.category);
+      const current = totals.get(category) || { units: 0, avoided: 0, reuse: 0 };
+      current.units += Number(item.quantity || 0);
+      current.avoided += Number(item.co2_avoided_kg || 0);
+      current.reuse += Number(item.estimated_reuse_value || 0);
+      totals.set(category, current);
+    }
+    return [...totals.entries()]
+      .map(([fullName, totalsByCategory]) => ({
+        name: shortReportLabel(fullName, 16),
+        fullName,
+        ...totalsByCategory,
+      }))
+      .sort((left, right) => right.units - left.units)
+      .slice(0, 8);
+  }, [equipmentRows]);
+
+  const completedStages = bundle.stages.filter((stage) => stage.status === 'completed').length;
+  const transactionCount = Number(bundle.transactionProjection?.transactionSummary.transactionCount || 0);
+  const sourceCounts = equipmentRows.reduce<Record<string, number>>((totals, item) => {
+    const label = projectionSourceLabel(item.source);
+    totals[label] = (totals[label] || 0) + Number(item.quantity || 0);
+    return totals;
+  }, {});
+
   const rows = [
     ['Project', project.name],
     ['Status', statusConfig(project.status).label],
     ['Materials', formatNumber(materialKpis.equipmentCount)],
-    ['CO2e Avoided', `${formatNumber(materialKpis.co2AvoidedKg)} kg`],
-    ['Reuse Value', formatCurrency(materialKpis.reuseValue, project.currency || 'USD')],
-    ['Net Financial', formatCurrency(financialTotals.net, project.currency || 'USD')],
+    ['CO2e Avoided', formatNumber(materialKpis.co2AvoidedKg) + ' kg'],
+    ['Reuse Value', formatCurrency(materialKpis.reuseValue, currency)],
+    ['Net Financial', formatCurrency(financialTotals.net, currency)],
   ];
 
   const exportReport = () => {
-    const text = rows.map(([label, value]) => `${label},${String(value).replaceAll(',', ' ')}`).join('\n');
-    const blob = new Blob([`Metric,Value\n${text}`], { type: 'text/csv;charset=utf-8' });
+    const text = rows.map(([label, value]) => label + ',' + String(value).replaceAll(',', ' ')).join('\n');
+    const blob = new Blob(['Metric,Value\n' + text], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${project.name.replace(/[^\w-]+/g, '-').toLowerCase()}-project-report.csv`;
+    link.download = project.name.replace(/[^\w-]+/g, '-').toLowerCase() + '-project-report.csv';
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
   };
+  const kpis: Array<{ label: string; value: string; detail: string; icon: LucideIcon; tone: string }> = [
+    {
+      label: 'Assets in scope',
+      value: formatNumber(materialKpis.equipmentCount),
+      detail: Object.entries(sourceCounts).map(([source, count]) => source + ' ' + formatNumber(count)).join(' · ') || 'No linked assets',
+      icon: Package,
+      tone: 'bg-signal-teal/10 text-signal-teal',
+    },
+    {
+      label: 'Avoided CO2e',
+      value: formatNumber(materialKpis.co2AvoidedKg) + ' kg',
+      detail: 'Calculated circularity impact',
+      icon: Leaf,
+      tone: 'bg-verified-green/10 text-verified-green',
+    },
+    {
+      label: 'Reuse value',
+      value: formatCurrency(materialKpis.reuseValue, currency),
+      detail: 'Recoverable asset value',
+      icon: DollarSign,
+      tone: 'bg-deep-teal/10 text-deep-teal',
+    },
+    {
+      label: 'Net financial',
+      value: formatCurrency(financialTotals.net, currency),
+      detail: formatCurrency(financialTotals.revenue, currency) + ' credits less ' + formatCurrency(financialTotals.cost, currency) + ' costs',
+      icon: BarChart3,
+      tone: 'bg-gray-100 text-gray-600',
+    },
+  ];
 
   return (
-    <div className="rounded-apple-lg border border-gray-100 bg-white p-6">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-5 pb-6">
+      <header className="flex flex-col gap-4 border-b border-gray-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-sub-heading font-semibold text-gray-900">Project Report</h2>
-          <p className="text-caption text-gray-500">Cirtell project execution snapshot</p>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Badge className="border-signal-teal/20 bg-signal-teal/10 text-signal-teal">
+              {statusConfig(project.status).label}
+            </Badge>
+            <span className="text-micro text-gray-400">
+              {project.timeframe_start ? formatDate(project.timeframe_start) : 'No start date'}
+              {' to '}
+              {project.timeframe_end ? formatDate(project.timeframe_end) : 'Open ended'}
+            </span>
+          </div>
+          <h2 className="text-sub-heading font-semibold text-gray-900">Project performance report</h2>
+          <p className="mt-1 text-caption text-gray-500">
+            Material recovery, financial outcome, workflow progress, and environmental impact.
+          </p>
         </div>
-        <button type="button" onClick={exportReport} className="btn-primary">
+        <button type="button" onClick={exportReport} className="btn-primary shrink-0">
           <FileText className="h-4 w-4" />
           Export CSV
         </button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {rows.map(([label, value]) => (
-          <div key={label} className="rounded-apple bg-gray-50 p-4">
-            <p className="text-micro font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-            <p className="mt-1 text-caption font-semibold text-gray-900">{value}</p>
-          </div>
+      </header>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {kpis.map(({ label, value, detail, icon: Icon, tone }) => (
+          <section key={label} className="rounded-apple-lg border border-gray-100 bg-white p-4">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <p className="text-micro font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+              <span className={'flex h-9 w-9 shrink-0 items-center justify-center rounded-apple ' + tone}>
+                <Icon className="h-4 w-4" />
+              </span>
+            </div>
+            <p className="font-display text-xl font-semibold text-gray-900">{value}</p>
+            <p className="mt-1 min-h-8 text-micro leading-relaxed text-gray-400">{detail}</p>
+          </section>
         ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-apple-lg border border-deep-teal/10 bg-deep-teal/[0.04] px-5 py-3 text-micro">
+        <span className="font-semibold text-deep-teal">{transactionCount} linked transactions</span>
+        <span className="text-gray-500">{completedStages} of {bundle.stages.length} workflow stages complete</span>
+        <span className="text-gray-500">{bundle.evidence.length} evidence files</span>
+        <span className="text-gray-500">{bundle.logistics.length} logistics records</span>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <ReportChart
+          title="Assets by lifecycle stage"
+          subtitle="Units currently assigned to each project stage"
+          empty={stageData.length === 0}
+        >
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={stageData} layout="vertical" margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
+                <CartesianGrid stroke="#eef2f1" strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="name" width={112} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={REPORT_TOOLTIP_STYLE} cursor={{ fill: '#f0fdfa' }} />
+                <Bar dataKey="units" name="Units" fill={REPORT_COLORS[0]} radius={[0, 5, 5, 0]} maxBarSize={24} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ReportChart>
+
+        <ReportChart
+          title="Condition mix"
+          subtitle="Physical condition across all project assets"
+          empty={conditionData.length === 0}
+        >
+          <div className="grid min-h-[280px] grid-cols-[minmax(0,1fr)_150px] items-center gap-2">
+            <div className="h-[260px] min-w-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={conditionData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={94} paddingAngle={3} stroke="none">
+                    {conditionData.map((entry, index) => <Cell key={entry.name} fill={REPORT_COLORS[index % REPORT_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={REPORT_TOOLTIP_STYLE} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="space-y-2">
+              {conditionData.map((entry, index) => (
+                <div key={entry.name} className="flex items-center justify-between gap-3 text-micro">
+                  <span className="flex min-w-0 items-center gap-2 text-gray-500">
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: REPORT_COLORS[index % REPORT_COLORS.length] }} />
+                    <span className="truncate">{entry.name}</span>
+                  </span>
+                  <span className="font-semibold text-gray-900">{formatNumber(entry.value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </ReportChart>
+
+        <ReportChart
+          title="Financial composition"
+          subtitle="Revenue, circularity credits, and project costs"
+          empty={financialTotals.rows.length === 0}
+        >
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={financialData} margin={{ top: 8, right: 8, left: 4, bottom: 4 }}>
+                <CartesianGrid stroke="#eef2f1" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={(value) => Number(value).toLocaleString()} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} width={72} />
+                <Tooltip formatter={(value) => formatCurrency(Number(value || 0), currency)} contentStyle={REPORT_TOOLTIP_STYLE} cursor={{ fill: '#f8fafc' }} />
+                <Bar dataKey="value" name="Amount" radius={[5, 5, 0, 0]} maxBarSize={52}>
+                  {financialData.map((entry) => <Cell key={entry.name} fill={entry.fill} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ReportChart>
+
+        <ReportChart
+          title="Workflow completion"
+          subtitle="Task completion within each configured stage"
+          empty={workflowData.length === 0}
+        >
+          <div className="h-[280px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={workflowData} layout="vertical" margin={{ top: 4, right: 20, left: 4, bottom: 4 }}>
+                <CartesianGrid stroke="#eef2f1" strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={(value) => value + '%'} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <Tooltip formatter={(value) => Number(value || 0) + '%'} contentStyle={REPORT_TOOLTIP_STYLE} cursor={{ fill: '#f0fdfa' }} />
+                <Bar dataKey="progress" name="Complete" fill={REPORT_COLORS[1]} radius={[0, 5, 5, 0]} maxBarSize={22} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </ReportChart>
+
+        <ReportChart
+          title="Impact by equipment category"
+          subtitle="Avoided emissions and recoverable value for the largest material groups"
+          empty={impactData.length === 0}
+          className="xl:col-span-2"
+        >
+          <div className="mb-3 flex flex-wrap gap-4 text-micro text-gray-500">
+            <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-verified-green" />Avoided kg CO2e</span>
+            <span className="flex items-center gap-2"><span className="h-0.5 w-4 bg-deep-teal" />Reuse value ({currency})</span>
+          </div>
+          <div className="h-[320px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={impactData} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+                <CartesianGrid stroke="#eef2f1" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} interval={0} />
+                <YAxis yAxisId="carbon" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} width={64} />
+                <YAxis yAxisId="value" orientation="right" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} width={72} />
+                <Tooltip
+                  formatter={(value, name) => name === 'Reuse value' ? formatCurrency(Number(value || 0), currency) : formatNumber(Number(value || 0)) + ' kg'}
+                  contentStyle={REPORT_TOOLTIP_STYLE}
+                />
+                <Bar yAxisId="carbon" dataKey="avoided" name="Avoided CO2e" fill={REPORT_COLORS[1]} radius={[5, 5, 0, 0]} maxBarSize={48} />
+                <Line yAxisId="value" type="monotone" dataKey="reuse" name="Reuse value" stroke={REPORT_COLORS[0]} strokeWidth={2.5} dot={{ r: 3, fill: REPORT_COLORS[0] }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </ReportChart>
       </div>
     </div>
   );
 }
-
 function MembersTab({ members, project }: { members: ProjectMember[]; project: Project }) {
   return (
     <div className="space-y-4">

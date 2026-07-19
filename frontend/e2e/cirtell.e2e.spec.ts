@@ -145,6 +145,14 @@ test('admin can enter dashboard and navigate core modules', async ({ page }) => 
   await expect(manualFinancialRow).toContainText('Manual');
   await expect(manualFinancialRow.getByTitle('Open source transaction')).toHaveCount(0);
   await expect(manualFinancialRow.getByRole('button')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Reports' }).click();
+  await expect(page.getByRole('heading', { name: 'Project performance report' })).toBeVisible();
+  await expect(page.getByText('Assets by lifecycle stage')).toBeVisible();
+  await expect(page.getByText('Condition mix')).toBeVisible();
+  await expect(page.getByText('Financial composition')).toBeVisible();
+  await expect(page.getByText('Workflow completion')).toBeVisible();
+  await expect(page.getByText('Impact by equipment category')).toBeVisible();
+  await expect(page.locator('.recharts-responsive-container')).toHaveCount(5);
   expect(projectChildDeletes).toEqual([]);
 
   await expectNoPageErrors(pageErrors);
