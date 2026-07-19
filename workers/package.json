@@ -17,6 +17,9 @@
   "author": "",
   "license": "UNLICENSED",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "hono": "^4.0.0",
     "jose": "^6.1.3"

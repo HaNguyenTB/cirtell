@@ -176,9 +176,11 @@ test('admin can create a scoped part', async ({ page }) => {
     emission_factor_kg: 0.8,
   });
 
+  await expect(modal).toBeHidden();
   await page.getByPlaceholder('Search parts...').fill('OPT-777');
-  await expect(page.getByText('OPT-777')).toBeVisible();
-  await expect(page.getByText('Optical Module 777')).toBeVisible();
+  const createdPartRow = page.getByRole('row').filter({ hasText: 'OPT-777' });
+  await expect(createdPartRow).toBeVisible();
+  await expect(createdPartRow).toContainText('Optical Module 777');
   await expectNoPageErrors(pageErrors);
 });
 

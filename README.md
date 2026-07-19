@@ -56,13 +56,13 @@ cirtell/
 
 ## Prerequisites
 
-- Node.js 20 recommended.
+- Node.js 22 or later.
 - npm.
 - Cloudflare account with Workers, Pages, D1, and R2 enabled.
 - Wrangler authentication for local Cloudflare development.
 - Google OAuth client ID for real SSO environments.
 
-CI uses Node.js 20.
+CI uses Node.js 22.
 
 ## Local Setup
 

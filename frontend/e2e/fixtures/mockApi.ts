@@ -601,6 +601,10 @@ export async function installMockApi(page: Page, state = createMockState(), opti
   const isSuperAdmin = options.isSuperAdmin ?? role === 'Admin';
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
+    if (url.origin === 'https://accounts.google.com' && url.pathname === '/gsi/client') {
+      await route.fulfill({ status: 200, contentType: 'application/javascript', body: '' });
+      return;
+    }
     if (!url.pathname.startsWith('/api/')) {
       await route.continue();
       return;

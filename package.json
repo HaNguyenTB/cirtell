@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Cirtell workspace tooling",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "diagrams:render": "node scripts/render-mermaid.mjs",
     "diagrams:clean": "node scripts/render-mermaid.mjs --clean",
