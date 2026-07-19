@@ -278,6 +278,30 @@ describe('transaction inventory auto-sync', () => {
     expect(await movementCount(missingPart.json.id)).toBe(0);
   });
 
+  it('returns a single line-item serial directly in the transaction list', async () => {
+    const transactionId = await createTransaction({
+      date: '2026-02-06',
+      movement_type: 'Purchase',
+      items: [
+        {
+          part_id: 'part_router',
+          serial_number: 'SN-RTR-0001',
+          quantity: 1,
+          destination_warehouse_id: 'wh_source',
+        },
+      ],
+    });
+
+    const listed = await api('GET', `/api/transactions?transaction_id=${transactionId}`);
+    expect(listed.response.status).toBe(200);
+    expect(listed.json.transactions).toEqual([
+      expect.objectContaining({
+        id: transactionId,
+        itemCount: 1,
+        serialNumber: 'SN-RTR-0001',
+      }),
+    ]);
+  });
   it('rejects insufficient stock without writing partial transaction or movement rows', async () => {
     await seedInventory('inv_source_router_low', 'wh_source', null, 'part_router', 2);
 

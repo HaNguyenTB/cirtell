@@ -879,7 +879,10 @@ const TRANSACTION_FROM = `
   LEFT JOIN projects pr ON t.project_id = pr.id
   LEFT JOIN contacts ct ON t.contact_id = ct.id
   LEFT JOIN (
-    SELECT transaction_id, COUNT(*) AS item_count
+    SELECT
+      transaction_id,
+      COUNT(*) AS item_count,
+      MAX(serial_number) AS single_item_serial_number
     FROM transaction_items
     WHERE superseded_at IS NULL
     GROUP BY transaction_id
@@ -904,7 +907,10 @@ const TRANSACTION_SELECT = `
     p.model_name AS partName,
     p.technology_type AS technology,
     p.category,
-    t.serial_number AS serialNumber,
+    CASE
+      WHEN COALESCE(ti.item_count, 0) = 1 THEN ti.single_item_serial_number
+      ELSE t.serial_number
+    END AS serialNumber,
     t.condition,
     t.po_number AS poNumber,
     t.po_file_key AS poFileKey,

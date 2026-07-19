@@ -1048,7 +1048,7 @@ function TransactionsTable({
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-caption text-gray-600 dark:text-gray-300">
-                      {Number(transaction.itemCount || 0) > 0 ? (
+                      {Number(transaction.itemCount || 0) > 1 ? (
                         <button
                           onClick={() => onToggleExpand(transaction.id)}
                           className="inline-flex items-center gap-1 font-medium text-signal-teal transition-colors hover:text-signal-teal/80"
@@ -1057,7 +1057,9 @@ function TransactionsTable({
                           {transaction.itemCount} item{Number(transaction.itemCount) > 1 ? 's' : ''}
                         </button>
                       ) : (
-                        transaction.serialNumber || '-'
+                        <span className="font-mono text-gray-600 dark:text-gray-300">
+                          {transaction.serialNumber || '—'}
+                        </span>
                       )}
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
@@ -1368,7 +1370,7 @@ function ExpandedLineItems({ items, loading }: { items: TransactionItemDetail[];
                   <span className="font-medium text-gray-900 dark:text-white">{item.partNumber || '-'}</span>
                   {item.partName && <span className="ml-1 text-gray-400">{item.partName}</span>}
                 </td>
-                <td className="py-1.5 pr-4 font-mono">{item.serialNumber || '-'}</td>
+                <td className="py-1.5 pr-4 font-mono">{item.serialNumber || '—'}</td>
                 <td className="py-1.5 pr-4">{item.condition || '-'}</td>
                 <td className="py-1.5 pr-4 text-right">{item.quantity}</td>
                 <td className="py-1.5 pr-4 text-right">{formatCurrency(item.unitPrice)}</td>
