@@ -163,6 +163,7 @@ export interface MockState {
     inventoryMoves: unknown[];
     zoneCreates: unknown[];
     ghgCreates: unknown[];
+    ghgDeletes: string[];
   };
 }
 
@@ -472,6 +473,7 @@ export function createMockState(): MockState {
       inventoryMoves: [],
       zoneCreates: [],
       ghgCreates: [],
+      ghgDeletes: [],
     },
   };
 }
@@ -1117,6 +1119,14 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     };
     state.ghgEntries.unshift(entry);
     await respond(route, { success: true, data: entry });
+    return;
+  }
+
+  if (path.startsWith('/api/ghg/entries/') && method === 'DELETE') {
+    const entryId = decodeURIComponent(path.split('/').pop() || '');
+    state.requests.ghgDeletes.push(entryId);
+    state.ghgEntries = state.ghgEntries.filter((entry) => entry.id !== entryId);
+    await respond(route, { success: true });
     return;
   }
 

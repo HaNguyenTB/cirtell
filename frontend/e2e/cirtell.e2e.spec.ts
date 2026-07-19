@@ -304,6 +304,21 @@ test('inventory and carbon workflows respect viewer permissions', async ({ brows
   });
   await expect(userPage.getByText('Grid electricity E2E')).toBeVisible();
   await expect(userPage.getByRole('row', { name: /Grid electricity E2E.*25/ })).toBeVisible();
+  const createdEntry = userSetup.state.ghgEntries.find((entry) => entry.source_description === 'Grid electricity E2E');
+  expect(createdEntry).toBeDefined();
+
+  await userPage.getByRole('button', { name: 'Delete Grid electricity E2E' }).click();
+  const deleteDialog = userPage.getByRole('dialog', { name: 'Delete emission entry?' });
+  await expect(deleteDialog).toBeVisible();
+  await expect(deleteDialog).toContainText('Grid electricity E2E');
+  await expect(deleteDialog).toContainText('25 kg CO2e');
+  await deleteDialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(deleteDialog).not.toBeVisible();
+
+  await userPage.getByRole('button', { name: 'Delete Grid electricity E2E' }).click();
+  await deleteDialog.getByRole('button', { name: 'Delete entry' }).click();
+  await expect.poll(() => userSetup.state.requests.ghgDeletes).toEqual([createdEntry!.id]);
+  await expect(userPage.getByText('Grid electricity E2E')).toHaveCount(0);
   await expectNoPageErrors(userSetup.pageErrors);
   await userContext.close();
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
-import { Plus, Trash2, X, Leaf, AlertCircle, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, X, Leaf, AlertCircle, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 
 interface GhgEntry {
   id: string;
@@ -112,6 +112,8 @@ export function CarbonPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<GhgEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [report, setReport] = useState<GhgReport | null>(null);
   const [syncStart, setSyncStart] = useState('');
@@ -154,14 +156,29 @@ export function CarbonPage() {
     fetchReport();
   }, [fetchEntries, fetchCategories, fetchReport]);
 
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this emission entry?')) return;
+  useEffect(() => {
+    if (!deleteTarget) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deleting) setDeleteTarget(null);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [deleteTarget, deleting]);
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setError('');
     try {
-      await apiRequest(`/api/ghg/entries/${id}`, { method: 'DELETE' });
-      fetchEntries();
-      fetchReport();
+      await apiRequest('/api/ghg/entries/' + deleteTarget.id, { method: 'DELETE' });
+      setDeleteTarget(null);
+      await Promise.all([fetchEntries(), fetchReport()]);
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to delete emission entry'));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -434,7 +451,12 @@ export function CarbonPage() {
                     {canEdit && (
                       <td className="px-4 py-3.5 text-right">
                         {e.source_type !== 'transaction' && (
-                          <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-signal-teal">
+                          <button
+                            onClick={() => setDeleteTarget(e)}
+                            className="btn-ghost p-1.5 text-gray-300 hover:text-red-600"
+                            title="Delete emission entry"
+                            aria-label={'Delete ' + e.source_description}
+                          >
                             <Trash2 size={14} />
                           </button>
                         )}
@@ -447,6 +469,61 @@ export function CarbonPage() {
           </table>
         </div>
       </div>
+
+      {/* Delete confirmation */}
+      {deleteTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => { if (!deleting) setDeleteTarget(null); }}
+        >
+          <div
+            className="modal-panel max-w-md"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-emission-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-6 pt-6 pb-5">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-apple-md bg-red-50 text-red-600">
+                  <AlertTriangle size={21} aria-hidden="true" />
+                </div>
+                <div className="min-w-0 pt-0.5">
+                  <h2 id="delete-emission-title" className="text-lg font-semibold text-gray-900">
+                    Delete emission entry?
+                  </h2>
+                  <p className="mt-1 text-sm leading-5 text-gray-500">
+                    This permanently removes the manual emission record. This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-apple-md border border-gray-100 bg-gray-50 px-4 py-3">
+                <p className="truncate text-sm font-semibold text-gray-900">{deleteTarget.source_description}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+                  <span><strong className="font-semibold text-gray-700">{deleteTarget.co2e_kg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> kg CO2e</span>
+                  <span>{deleteTarget.reporting_period_start} - {deleteTarget.reporting_period_end}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 border-t border-gray-100 bg-gray-50/70 px-6 py-4">
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting} className="btn-secondary">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex items-center justify-center gap-2 rounded-apple-md bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deleting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
+                {deleting ? 'Deleting...' : 'Delete entry'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Modal */}
       {showForm && (
