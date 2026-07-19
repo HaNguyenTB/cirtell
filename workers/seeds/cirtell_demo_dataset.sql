@@ -117,15 +117,24 @@ VALUES (
   125000, NULL, '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z'
 );
 
+-- Transaction-linked materials are projected at read time. Keep only genuinely
+-- project-managed equipment here so the demo does not double count assets.
+DELETE FROM project_equipment
+WHERE id IN ('equip_demo_air6488', 'equip_demo_bb6630');
+
 INSERT OR IGNORE INTO project_equipment (
   id, project_id, tenant_id, company_id, item_name, asset_tag, serial_number,
   vendor, category, quantity, condition, current_stage, weight_kg,
   estimated_reuse_value, co2_avoided_kg, notes, part_id, created_at, updated_at
 )
-VALUES
-  ('equip_demo_air6488', 'project_demo_ran_refresh_2026', 'tenant_cirtell_default', 'company_cirtell_default', 'AIR 6488 Massive MIMO 64T64R', 'CIR-AIR-6488-001', 'SN-AIR6488-DEMO', 'Ericsson', 'Radio', 3, 'Good', 'redeployment', 20.0, 51000, 255.0, 'Linked to parts catalog for material lookup demo.', 'part_demo_air6488', '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z'),
-  ('equip_demo_bb6630', 'project_demo_ran_refresh_2026', 'tenant_cirtell_default', 'company_cirtell_default', 'Baseband 6630', 'CIR-BB-6630-002', 'SN-BB6630-DEMO', 'Ericsson', 'BBU', 4, 'Scrap', 'recycling', 7.0, 3200, 168.0, 'Recycling batch for carbon avoided-emissions demo.', 'part_demo_bb6630', '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z');
-
+VALUES (
+  'equip_demo_site_test_kit', 'project_demo_ran_refresh_2026',
+  'tenant_cirtell_default', 'company_cirtell_default',
+  'Site survey and RF test kit', 'CIR-SURVEY-KIT-001', 'SN-SURVEY-DEMO',
+  'Cirtell Demo Operator', 'Project tooling', 1, 'Good', 'assessment', 12.0,
+  1500, 0, 'Project-managed tooling; not generated from a transaction.', NULL,
+  '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z'
+);
 INSERT OR IGNORE INTO project_workflow_stages (id, project_id, stage, label, status, sort_order, completed_at, updated_at)
 VALUES
   ('stage_demo_assessment', 'project_demo_ran_refresh_2026', 'assessment', 'Assessment', 'completed', 1, '2026-06-15T00:00:00.000Z', '2026-06-28T00:00:00.000Z'),
@@ -137,11 +146,18 @@ VALUES
   ('task_demo_scope', 'project_demo_ran_refresh_2026', 'stage_demo_assessment', 'Confirm asset scope and compliance checks', 'done', '2026-06-15', '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z'),
   ('task_demo_refurb', 'project_demo_ran_refresh_2026', 'stage_demo_refurbishment', 'Complete bench testing for reusable radios', 'open', '2026-07-10', '2026-06-28T00:00:00.000Z', '2026-06-28T00:00:00.000Z');
 
-INSERT OR IGNORE INTO project_financials (id, project_id, tenant_id, company_id, type, category, description, amount, currency, stage, incurred_at, created_at)
-VALUES
-  ('fin_demo_refurb_cost', 'project_demo_ran_refresh_2026', 'tenant_cirtell_default', 'company_cirtell_default', 'cost', 'Refurbishment', 'Testing and repair labor', 14500, 'USD', 'refurbishment', '2026-06-25', '2026-06-28T00:00:00.000Z'),
-  ('fin_demo_reuse_value', 'project_demo_ran_refresh_2026', 'tenant_cirtell_default', 'company_cirtell_default', 'revenue', 'Redeployment value', 'Avoided purchase value from reusable assets', 69000, 'USD', 'redeployment', '2026-06-28', '2026-06-28T00:00:00.000Z');
+-- Transaction values are projected into Financials. Retain only independent
+-- project costs here; remove the legacy manually mirrored redeployment value.
+DELETE FROM project_financials
+WHERE id = 'fin_demo_reuse_value';
 
+INSERT OR IGNORE INTO project_financials (id, project_id, tenant_id, company_id, type, category, description, amount, currency, stage, incurred_at, created_at)
+VALUES (
+  'fin_demo_refurb_cost', 'project_demo_ran_refresh_2026',
+  'tenant_cirtell_default', 'company_cirtell_default', 'cost', 'Refurbishment',
+  'Testing and repair labor not represented by a transaction', 14500, 'USD',
+  'refurbishment', '2026-06-25', '2026-06-28T00:00:00.000Z'
+);
 INSERT OR IGNORE INTO project_logistics (id, project_id, tenant_id, company_id, shipment_type, status, carrier, origin, destination, scheduled_date, tracking_reference, estimated_cost, notes)
 VALUES
   ('log_demo_collection', 'project_demo_ran_refresh_2026', 'tenant_cirtell_default', 'company_cirtell_default', 'collection', 'in_transit', 'Cirtell Demo Logistics', 'Hoa Lac Trial Cluster', 'Cirtell Circularity Hub', '2026-06-20', 'CIR-DEMO-TRK-001', 2300, 'Demo inbound logistics leg.');

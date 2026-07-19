@@ -548,7 +548,7 @@ async function validateProject(db: D1Database, value: unknown, ownership: ScopeV
   const row = await db.prepare(`SELECT id FROM projects WHERE id = ? AND ${ownerWhere.clause}`)
     .bind(id, ...ownerWhere.params)
     .first<{ id: string }>();
-  if (!row) throw new ValidationError('Project not found');
+  if (!row) throw new ValidationError('Project not found', 404);
   return id;
 }
 
@@ -1087,6 +1087,7 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
   try {
     const scope = await resolveTenantScope(c);
     const search = c.req.query('search')?.trim();
+    const transactionId = c.req.query('transaction_id')?.trim();
     const movementType = c.req.query('movement_type') || c.req.query('type');
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
@@ -1119,6 +1120,10 @@ transactionsRoutes.get('/', requirePermission(Permission.VIEW_TRANSACTIONS), asy
     if (marketId) {
       conditions.push('t.market_id = ?');
       params.push(marketId);
+    }
+    if (transactionId) {
+      conditions.push('t.id = ?');
+      params.push(transactionId);
     }
     if (search) {
       conditions.push(`(

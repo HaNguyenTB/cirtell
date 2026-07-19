@@ -9,6 +9,13 @@ import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { Permission, requirePermission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopedWhere, type TenantScope } from '../middleware/tenantScope';
+import {
+  buildProjectTransactionProjection,
+  type ProjectedEquipment,
+  type ProjectedFinancial,
+  type ProjectProjectionScope,
+  type ProjectTransactionProjection,
+} from '../services/projectTransactionProjection';
 
 type Variables = { user: User };
 type SQLValue = string | number | null;
@@ -31,8 +38,31 @@ interface CountRow {
   count: number;
 }
 
-interface SumRow {
-  value: number | null;
+interface ProjectEquipmentKpiRow {
+  id: string;
+  part_id: string | null;
+  serial_number: string | null;
+  condition: string;
+  quantity: number;
+  current_stage: string;
+  estimated_reuse_value: number | null;
+  co2_avoided_kg: number | null;
+}
+
+interface ProjectFinancialKpiRow {
+  id: string;
+  type: 'cost' | 'revenue' | 'credit';
+  category: string;
+  amount: number;
+  currency: string;
+  stage: string | null;
+  incurred_at: string | null;
+  created_at: string | null;
+}
+
+interface ReconciledProjectProjection extends ProjectTransactionProjection {
+  matchedEquipmentProjectionIds: string[];
+  matchedFinancialTransactionIds: string[];
 }
 
 interface EvidenceRow {
@@ -59,6 +89,86 @@ interface CatalogPartRow {
   description?: string | null;
 }
 
+function projectionToken(value?: string | null) {
+  return (value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function matchesProjectedEquipment(manual: ProjectEquipmentKpiRow, projected: ProjectedEquipment) {
+  if (!manual.part_id || manual.part_id !== projected.partId) return false;
+  if (Number(manual.quantity) !== Number(projected.quantity)) return false;
+  if (projectionToken(manual.condition) !== projectionToken(projected.condition)) return false;
+  if (projectionToken(manual.current_stage) !== projectionToken(projected.currentStage)) return false;
+
+  const manualSerial = projectionToken(manual.serial_number);
+  const projectedSerial = projectionToken(projected.serialNumber);
+  return !manualSerial || !projectedSerial || manualSerial === projectedSerial;
+}
+
+function matchesProjectedFinancial(manual: ProjectFinancialKpiRow, projected: ProjectedFinancial) {
+  return manual.type === projected.type
+    && Number(manual.amount) === Number(projected.amount)
+    && projectionToken(manual.currency) === projectionToken(projected.currency)
+    && projectionToken(manual.category) === projectionToken(projected.category)
+    && projectionToken(manual.stage) === projectionToken(projected.stage)
+    && (manual.incurred_at || manual.created_at || '').slice(0, 10) === projected.incurredAt.slice(0, 10);
+}
+
+function reconcileProjectProjection(
+  equipment: ProjectEquipmentKpiRow[],
+  financials: ProjectFinancialKpiRow[],
+  projection: ProjectTransactionProjection,
+) {
+  const matchedEquipmentProjectionIds = projection.projectedEquipment
+    .filter((projected) => equipment.some((manual) => matchesProjectedEquipment(manual, projected)))
+    .map((projected) => projected.id);
+  const matchedFinancialTransactionIds = projection.projectedFinancials
+    .filter((projected) => financials.some((manual) => matchesProjectedFinancial(manual, projected)))
+    .map((projected) => projected.transactionId);
+
+  const visibleManualEquipment = equipment.filter(
+    (manual) => !projection.projectedEquipment.some((projected) => matchesProjectedEquipment(manual, projected)),
+  );
+  const visibleManualFinancials = financials.filter(
+    (manual) => !projection.projectedFinancials.some((projected) => matchesProjectedFinancial(manual, projected)),
+  );
+
+  const equipmentCount = projection.projectedEquipment.length + visibleManualEquipment.length;
+  const co2Avoided = projection.transactionSummary.projectedCo2AvoidedKg
+    + visibleManualEquipment.reduce((sum, item) => sum + Number(item.co2_avoided_kg || 0), 0);
+  const reuseValue = projection.transactionSummary.redeploymentCredit
+    + visibleManualEquipment
+      .filter((item) => projectionToken(item.current_stage) === 'redeployment')
+      .reduce((sum, item) => sum + Number(item.estimated_reuse_value || 0), 0);
+  const transactionRevenueCredits = projection.transactionSummary.salesRevenue
+    + projection.transactionSummary.redeploymentCredit
+    + projection.transactionSummary.recyclingRevenue;
+  const manualRevenueCredits = visibleManualFinancials
+    .filter((item) => item.type !== 'cost')
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const costs = projection.transactionSummary.purchaseCost
+    + visibleManualFinancials
+      .filter((item) => item.type === 'cost')
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const revenueCredits = transactionRevenueCredits + manualRevenueCredits;
+
+  const transactionProjection: ReconciledProjectProjection = {
+    ...projection,
+    matchedEquipmentProjectionIds,
+    matchedFinancialTransactionIds,
+  };
+
+  return {
+    transactionProjection,
+    kpis: {
+      equipment_count: equipmentCount,
+      co2_avoided_kg: co2Avoided,
+      reuse_value: reuseValue,
+      revenue_credits: revenueCredits,
+      costs,
+      net_financial: revenueCredits - costs,
+    },
+  };
+}
 class ProjectValidationError extends Error {
   constructor(
     message: string,
@@ -414,7 +524,11 @@ async function replaceProjectLinks(db: D1Database, projectId: string, table: str
   }
 }
 
-async function readProjectBundle(db: D1Database, projectId: string) {
+async function readProjectBundle(
+  db: D1Database,
+  projectId: string,
+  projectionScope: ProjectProjectionScope,
+) {
   const [
     vendors,
     technologies,
@@ -487,21 +601,17 @@ async function readProjectBundle(db: D1Database, projectId: string) {
       .all(),
   ]);
 
-  const equipmentCount = await db.prepare('SELECT COUNT(*) AS count FROM project_equipment WHERE project_id = ?')
-    .bind(projectId)
-    .first<CountRow>();
-  const co2Avoided = await db.prepare('SELECT SUM(co2_avoided_kg) AS value FROM project_equipment WHERE project_id = ?')
-    .bind(projectId)
-    .first<SumRow>();
-  const reuseValue = await db.prepare('SELECT SUM(estimated_reuse_value) AS value FROM project_equipment WHERE project_id = ?')
-    .bind(projectId)
-    .first<SumRow>();
-  const netFinancial = await db.prepare(`
-    SELECT SUM(CASE WHEN type IN ('revenue', 'credit') THEN amount ELSE -amount END) AS value
-    FROM project_financials
-    WHERE project_id = ?
-  `).bind(projectId).first<SumRow>();
+  const transactionProjection = await buildProjectTransactionProjection({
+    db,
+    projectId,
+    scope: projectionScope,
+  });
 
+  const reconciled = reconcileProjectProjection(
+    (equipment.results || []) as unknown as ProjectEquipmentKpiRow[],
+    (financials.results || []) as unknown as ProjectFinancialKpiRow[],
+    transactionProjection,
+  );
   return {
     vendors: vendors.results || [],
     technologies: technologies.results || [],
@@ -513,12 +623,8 @@ async function readProjectBundle(db: D1Database, projectId: string) {
     evidence: evidence.results || [],
     comments: comments.results || [],
     recentActivity: recentActivity.results || [],
-    kpis: {
-      equipment_count: equipmentCount?.count || 0,
-      co2_avoided_kg: co2Avoided?.value || 0,
-      reuse_value: reuseValue?.value || 0,
-      net_financial: netFinancial?.value || 0,
-    },
+    transactionProjection: reconciled.transactionProjection,
+    kpis: reconciled.kpis,
   };
 }
 
@@ -721,7 +827,10 @@ projectRoutes.get('/:id', async (c) => {
     const { project } = await getProject(c, projectId);
     if (!project) return c.json({ success: false, error: 'Project not found' }, 404);
     await ensureWorkflowStages(c.env.DB, projectId);
-    const bundle = await readProjectBundle(c.env.DB, projectId);
+    const bundle = await readProjectBundle(c.env.DB, projectId, {
+      tenantId: project.tenant_id,
+      companyId: project.company_id,
+    });
     return c.json({ success: true, project, ...bundle });
   } catch (err) {
     console.error('GET /projects/:id error:', err);
