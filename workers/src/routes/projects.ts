@@ -59,6 +59,15 @@ interface ProjectFinancialKpiRow {
   incurred_at: string | null;
   created_at: string | null;
 }
+interface ProjectListRow {
+  id: string;
+  tenant_id: string | null;
+  company_id: string | null;
+  equipment_count: number;
+  co2_avoided_kg: number;
+  reuse_value: number;
+  transaction_count: number;
+}
 
 interface ReconciledProjectProjection extends ProjectTransactionProjection {
   matchedEquipmentProjectionIds: string[];
@@ -132,7 +141,8 @@ function reconcileProjectProjection(
     (manual) => !projection.projectedFinancials.some((projected) => matchesProjectedFinancial(manual, projected)),
   );
 
-  const equipmentCount = projection.projectedEquipment.length + visibleManualEquipment.length;
+  const equipmentCount = [...projection.projectedEquipment, ...visibleManualEquipment]
+    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const co2Avoided = projection.transactionSummary.projectedCo2AvoidedKg
     + visibleManualEquipment.reduce((sum, item) => sum + Number(item.co2_avoided_kg || 0), 0);
   const reuseValue = projection.transactionSummary.redeploymentCredit
@@ -689,6 +699,7 @@ projectRoutes.get('/', async (c) => {
         COALESCE(eq.equipment_count, 0) AS equipment_count,
         COALESCE(eq.co2_avoided_kg, 0) AS co2_avoided_kg,
         COALESCE(eq.reuse_value, 0) AS reuse_value,
+        COALESCE(tx.transaction_count, 0) AS transaction_count,
         pv.vendor_names,
         pt.technology_names
       FROM projects p
@@ -697,12 +708,18 @@ projectRoutes.get('/', async (c) => {
       LEFT JOIN tenants t ON t.id = p.tenant_id
       LEFT JOIN (
         SELECT project_id,
-          COUNT(*) AS equipment_count,
+          SUM(quantity) AS equipment_count,
           SUM(co2_avoided_kg) AS co2_avoided_kg,
           SUM(estimated_reuse_value) AS reuse_value
         FROM project_equipment
         GROUP BY project_id
       ) eq ON eq.project_id = p.id
+      LEFT JOIN (
+        SELECT project_id, COUNT(*) AS transaction_count
+        FROM transactions
+        WHERE project_id IS NOT NULL AND voided_at IS NULL
+        GROUP BY project_id
+      ) tx ON tx.project_id = p.id
       LEFT JOIN (
         SELECT pvn.project_id, GROUP_CONCAT(tv.name, ', ') AS vendor_names
         FROM project_vendors pvn
@@ -720,7 +737,41 @@ projectRoutes.get('/', async (c) => {
       LIMIT 500
     `).bind(...params).all();
 
-    return c.json({ success: true, projects: results || [], items: results || [] });
+    const projects = (results || []) as unknown as ProjectListRow[];
+    const reconciledProjects = await Promise.all(projects.map(async (project) => {
+      if (Number(project.transaction_count || 0) === 0) return project;
+
+      const [equipment, projection] = await Promise.all([
+        c.env.DB.prepare(`
+          SELECT id, part_id, serial_number, condition, quantity, current_stage,
+                 estimated_reuse_value, co2_avoided_kg
+          FROM project_equipment
+          WHERE project_id = ?
+        `).bind(project.id).all<ProjectEquipmentKpiRow>(),
+        buildProjectTransactionProjection({
+          db: c.env.DB,
+          projectId: project.id,
+          scope: {
+            tenantId: project.tenant_id,
+            companyId: project.company_id,
+          },
+        }),
+      ]);
+      const reconciled = reconcileProjectProjection(
+        equipment.results || [],
+        [],
+        projection,
+      );
+
+      return {
+        ...project,
+        equipment_count: reconciled.kpis.equipment_count,
+        co2_avoided_kg: reconciled.kpis.co2_avoided_kg,
+        reuse_value: reconciled.kpis.reuse_value,
+      };
+    }));
+
+    return c.json({ success: true, projects: reconciledProjects, items: reconciledProjects });
   } catch (err) {
     console.error('GET /projects error:', err);
     return c.json({ success: false, error: 'Failed to fetch projects' }, 500);

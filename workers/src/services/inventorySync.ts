@@ -428,6 +428,30 @@ async function existingMovementByIdempotencyKey(
   return existing || null;
 }
 
+export async function findInventoryMovementsByIdempotencyKey(
+  db: D1Database,
+  idempotencyKey: string | null | undefined,
+  ownership: ScopeValues,
+): Promise<AppliedInventoryMovement[]> {
+  if (!idempotencyKey) return [];
+  requireScopedOwnership(ownership);
+  const scoped = ownershipClause(ownership);
+  const chunkPrefix = `${idempotencyKey}:chunk:`;
+  const { results } = await db.prepare(`
+    SELECT id
+    FROM inventory_movements
+    WHERE (idempotency_key = ? OR substr(idempotency_key, 1, length(?)) = ?)
+      AND ${scoped.clause}
+    ORDER BY created_at, id
+  `).bind(
+    idempotencyKey,
+    chunkPrefix,
+    chunkPrefix,
+    ...scoped.params,
+  ).all<{ id: string }>();
+
+  return (results || []).map((row) => ({ id: row.id, idempotent: true }));
+}
 function inventoryDeltaKey(
   warehouseId: string,
   zoneId: string | null | undefined,
@@ -499,7 +523,7 @@ export async function allocateTransactionInventoryMovements(
         quantity,
         condition,
         fromZoneId: movement.fromZoneId || null,
-        toZoneId: null,
+        toZoneId: movement.toZoneId || null,
       });
       continue;
     }
@@ -562,7 +586,7 @@ export async function allocateTransactionInventoryMovements(
         quantity: chunkQuantity,
         condition,
         fromZoneId: candidate.zoneId,
-        toZoneId: null,
+        toZoneId: movement.toZoneId || null,
         idempotencyKey: movement.idempotencyKey
           ? `${movement.idempotencyKey}:chunk:${chunkIndex}:${candidate.zoneId || 'default'}`
           : null,

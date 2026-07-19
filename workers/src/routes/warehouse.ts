@@ -8,7 +8,14 @@ import type { Env } from '../index';
 import { authMiddleware, logAudit, type User } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/permissions';
 import { appendScopeCondition, resolveTenantScope, scopeInsertValues, scopedWhere } from '../middleware/tenantScope';
-import { applyInventoryMovement, InventorySyncError, type InventoryMovementType } from '../services/inventorySync';
+import {
+  allocateTransactionInventoryMovements,
+  applyInventoryMovements,
+  findInventoryMovementsByIdempotencyKey,
+  InventorySyncError,
+  type InventoryMovementInput,
+  type InventoryMovementType,
+} from '../services/inventorySync';
 
 type Variables = { user: User };
 type SQLValue = string | number | null;
@@ -296,7 +303,7 @@ warehouseRoutes.post('/inventory/move', requirePermission(Permission.EDIT_WAREHO
       return c.json({ success: false, error: `movement_type must be: ${validTypes.join(', ')}` }, 400);
     }
 
-    const applied = await applyInventoryMovement(c.env.DB, {
+    const movement: InventoryMovementInput = {
       movementType: body.movement_type as InventoryMovementType,
       partId: body.part_id,
       quantity: qty,
@@ -311,12 +318,47 @@ warehouseRoutes.post('/inventory/move', requirePermission(Permission.EDIT_WAREHO
       syncSource: 'manual',
       idempotencyKey: body.idempotency_key || null,
       effectiveAt: body.effective_at || null,
-    }, ownership);
+    };
 
-    if (!applied.idempotent) {
-      await logAudit(c.env.DB, user.id, 'INVENTORY_MOVE', 'inventory_movements', applied.id);
+    const existingMovements = await findInventoryMovementsByIdempotencyKey(
+      c.env.DB,
+      movement.idempotencyKey,
+      ownership,
+    );
+    const plannedMovements = movement.fromWarehouseId && !movement.fromZoneId && existingMovements.length === 0
+      ? await allocateTransactionInventoryMovements(c.env.DB, [movement], ownership)
+      : [movement];
+    const appliedMovements = existingMovements.length > 0
+      ? existingMovements
+      : await applyInventoryMovements(c.env.DB, plannedMovements, ownership);
+    const primaryMovement = appliedMovements[0];
+
+    if (!primaryMovement) {
+      return c.json({ success: false, error: 'No inventory movement was applied' }, 500);
     }
-    return c.json({ success: true, id: applied.id, idempotent: applied.idempotent }, applied.idempotent ? 200 : 201);
+
+    for (const applied of appliedMovements) {
+      if (!applied.idempotent) {
+        await logAudit(
+          c.env.DB,
+          user.id,
+          'INVENTORY_MOVE',
+          'inventory_movements',
+          applied.id,
+          undefined,
+          ownership.tenantId,
+          ownership.companyId,
+        );
+      }
+    }
+
+    const idempotent = appliedMovements.every((applied) => applied.idempotent);
+    return c.json({
+      success: true,
+      id: primaryMovement.id,
+      movementIds: appliedMovements.map((applied) => applied.id),
+      idempotent,
+    }, idempotent ? 200 : 201);
   } catch (err: any) {
     if (err instanceof InventorySyncError) {
       const status = err.status === 409 ? 409 : err.status === 403 ? 403 : err.status === 404 ? 404 : 400;

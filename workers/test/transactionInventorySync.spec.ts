@@ -553,6 +553,42 @@ describe('warehouse inventory movement validation', () => {
     ))?.action).toBe('INVENTORY_MOVE');
   });
 
+  it('allocates a manual Transfer across warehouse-level and named-zone stock', async () => {
+    await seedInventory('inv_manual_transfer_default', 'wh_source', null, 'part_router', 2);
+    await seedInventory('inv_manual_transfer_zone', 'wh_source', 'zone_a', 'part_router', 3);
+
+    const result = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 4,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_dest',
+      idempotency_key: 'manual:transfer:split',
+    });
+
+    expect(result.response.status).toBe(201);
+    expect(result.json.movementIds).toHaveLength(2);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(0);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_a')).toBe(1);
+    expect(await inventoryQty('wh_dest', 'part_router')).toBe(4);
+    expect(await movementCount()).toBe(2);
+
+    const repeated = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 4,
+      from_warehouse_id: 'wh_source',
+      to_warehouse_id: 'wh_dest',
+      idempotency_key: 'manual:transfer:split',
+    });
+
+    expect(repeated.response.status).toBe(200);
+    expect(repeated.json.idempotent).toBe(true);
+    expect(repeated.json.movementIds).toEqual(result.json.movementIds);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_a')).toBe(1);
+    expect(await inventoryQty('wh_dest', 'part_router')).toBe(4);
+    expect(await movementCount()).toBe(2);
+  });
   it('rejects Ship when stock is missing and writes no partial data', async () => {
     await seedInventory('inv_manual_ship_low', 'wh_source', null, 'part_router', 2);
 

@@ -1686,7 +1686,7 @@ function ProjectOverviewTab({ bundle, onNavigateTab }: { bundle: ProjectBundle; 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard icon={Package} label="Materials" value={formatNumber(materialKpis.equipmentCount)} detail="Equipment rows" />
+        <StatCard icon={Package} label="Materials" value={formatNumber(materialKpis.equipmentCount)} detail="Total units" />
         <StatCard icon={Shield} label="CO2e Avoided" value={`${formatNumber(materialKpis.co2AvoidedKg)} kg`} detail="Estimated impact" />
         <StatCard icon={DollarSign} label="Reuse Value" value={formatCurrency(materialKpis.reuseValue, project.currency || 'USD')} detail="Recovered value" />
         <StatCard icon={GitBranch} label="Workflow" value={`${progress}%`} detail={`${completedStages} of ${bundle.stages.length} stages`} />

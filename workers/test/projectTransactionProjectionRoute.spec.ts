@@ -394,7 +394,7 @@ describe('project transaction projection route', () => {
     expect(result.json?.transactionProjection.matchedEquipmentProjectionIds).toHaveLength(1);
     expect(result.json?.transactionProjection.matchedFinancialTransactionIds).toEqual(['tx_a_existing']);
     expect(result.json?.kpis).toEqual({
-      equipment_count: 1,
+      equipment_count: 2,
       co2_avoided_kg: 0,
       reuse_value: 0,
       revenue_credits: 0,
@@ -403,6 +403,29 @@ describe('project transaction projection route', () => {
     });
   });
 
+  it('lists transaction-projected quantities without double counting legacy equipment mirrors', async () => {
+    await run(`
+      INSERT INTO project_equipment (
+        id, project_id, tenant_id, company_id, part_id, item_name, quantity,
+        condition, current_stage, estimated_reuse_value, co2_avoided_kg
+      ) VALUES (
+        'list_mirror_a', 'project_a', 'tenant_a', 'company_a1', 'part_a_router',
+        'Router A legacy mirror', 2, 'Good', 'acquisition', 200, 0
+      )
+    `);
+
+    const list = await apiRequest('GET', '/api/projects', {
+      token: seeded.tokens.adminA,
+    });
+
+    expect(list.response.status).toBe(200);
+    expect(list.json?.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'project_a',
+        equipment_count: 2,
+      }),
+    ]));
+  });
   it('filters transaction deep links by id without bypassing tenant scope', async () => {
     const own = await apiRequest('GET', '/api/transactions?transaction_id=tx_a_existing', {
       token: seeded.tokens.adminA,
