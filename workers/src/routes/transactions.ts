@@ -21,6 +21,10 @@ import {
   type TransactionInventoryItemInput,
   type TransactionMovementType,
 } from '../services/inventorySync';
+import {
+  prepareTransactionCarbonBatch,
+  type PreparedTransactionCarbonBatch,
+} from '../services/transactionCarbonSync';
 
 type Variables = { user: User };
 type SQLValue = string | number | null;
@@ -1646,6 +1650,18 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
     const inventorySyncError = syncPlan.ready
       ? null
       : syncPlan.reason || 'Transaction is not ready for inventory sync';
+    const carbonBatch = await prepareTransactionCarbonBatch(c.env.DB, {
+      id,
+      movementType: movementType as TransactionMovementType,
+      date,
+      partId,
+      quantity,
+      inventorySyncStatus,
+      syncVersion: syncPlan.ready ? 1 : 0,
+      items: lineItems.map((item) => ({ partId: item.partId, quantity: item.quantity })),
+      createdBy: user.id,
+      createdAt: now,
+    }, ownership, 'create');
     const statements: D1PreparedStatement[] = [];
 
     statements.push(c.env.DB.prepare(`
@@ -1690,6 +1706,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       statements.push(lineItemInsertStatement(c.env.DB, id, item, now, ownership));
     }
     statements.push(...inventoryBatch.statements);
+    statements.push(...carbonBatch.statements);
     statements.push(auditInsertStatement(
       c.env.DB,
       user.id,
@@ -1697,7 +1714,7 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       'transactions',
       id,
       ownership,
-      auditDetails({ inventorySyncStatus, inventorySyncError }),
+      auditDetails({ inventorySyncStatus, inventorySyncError, carbonEntries: carbonBatch.entries.length, carbonWarnings: carbonBatch.warnings }),
     ));
     statements.push(...automaticMovementAuditStatements(
       c.env.DB,
@@ -1715,6 +1732,8 @@ transactionsRoutes.post('/', requirePermission(Permission.EDIT_TRANSACTIONS), as
       id,
       inventorySyncStatus,
       inventorySyncError,
+      carbonEntries: carbonBatch.entries.length,
+      carbonWarnings: carbonBatch.warnings,
     }, 201);
   } catch (err) {
     if (err instanceof ValidationError) {
@@ -1917,6 +1936,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
     let inventorySyncVersion = existing.inventory_sync_version || 0;
     let inventorySyncedAt: string | null | undefined;
     let inventoryBatch: PreparedInventoryMovementBatch = { statements: [], movements: [] };
+    let carbonBatch: PreparedTransactionCarbonBatch = { statements: [], entries: [], warnings: [] };
 
     if (syncAffectingUpdate) {
       const targetSyncVersion = wasSynced || inventorySyncStatus !== 'synced'
@@ -1986,6 +2006,18 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
         inventorySyncError = syncPlan.reason || 'Transaction is not ready for inventory sync';
       }
 
+      carbonBatch = await prepareTransactionCarbonBatch(c.env.DB, {
+        id,
+        movementType: next.movement_type,
+        date: next.date,
+        partId: next.part_id,
+        quantity: next.quantity,
+        inventorySyncStatus,
+        syncVersion: inventorySyncVersion,
+        items: activeSyncItems.map((item) => ({ partId: item.partId, quantity: item.quantity })),
+        createdBy: user.id,
+        createdAt: now,
+      }, transactionOwnership, 'update');
       setColumn('inventory_sync_status', inventorySyncStatus);
       setColumn('inventory_sync_version', inventorySyncVersion);
       setColumn('inventory_synced_at', inventorySyncedAt === undefined ? null : inventorySyncedAt);
@@ -2011,6 +2043,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       }
     }
     statements.push(...inventoryBatch.statements);
+    statements.push(...carbonBatch.statements);
     statements.push(auditInsertStatement(
       c.env.DB,
       user.id,
@@ -2018,7 +2051,7 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       'transactions',
       id,
       transactionOwnership,
-      auditDetails({ inventorySyncStatus, inventorySyncError, syncAffectingUpdate }),
+      auditDetails({ inventorySyncStatus, inventorySyncError, syncAffectingUpdate, carbonEntries: carbonBatch.entries.length, carbonWarnings: carbonBatch.warnings }),
     ));
     statements.push(...automaticMovementAuditStatements(
       c.env.DB,
@@ -2034,6 +2067,8 @@ transactionsRoutes.put('/:id', requirePermission(Permission.EDIT_TRANSACTIONS), 
       success: true,
       inventorySyncStatus,
       inventorySyncError,
+      carbonEntries: carbonBatch.entries.length,
+      carbonWarnings: carbonBatch.warnings,
     });
   } catch (err) {
     if (err instanceof ValidationError) {
@@ -2071,7 +2106,7 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
 
     const existing = await c.env.DB.prepare(`
       SELECT
-        id, tenant_id, company_id, inventory_sync_status,
+        id, tenant_id, company_id, date, movement_type, part_id, quantity, inventory_sync_status,
         inventory_sync_version, voided_at
       FROM transactions
       WHERE id = ? AND ${scopeWhere.clause}
@@ -2081,6 +2116,10 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
         id: string;
         tenant_id: string | null;
         company_id: string | null;
+        date: string;
+        movement_type: TransactionMovementType;
+        part_id: string | null;
+        quantity: number;
         inventory_sync_status: string;
         inventory_sync_version: number;
         voided_at: string | null;
@@ -2112,6 +2151,17 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
       ? await prepareInventoryMovementBatch(c.env.DB, reversalMovements, transactionOwnership)
       : { statements: [], movements: [] };
 
+    const carbonBatch = await prepareTransactionCarbonBatch(c.env.DB, {
+      id,
+      movementType: existing.movement_type,
+      date: existing.date,
+      partId: existing.part_id,
+      quantity: existing.quantity,
+      inventorySyncStatus: 'voided',
+      syncVersion: nextSyncVersion,
+      createdBy: user.id,
+      createdAt: now,
+    }, transactionOwnership, 'void');
     const statements: D1PreparedStatement[] = [
       c.env.DB.prepare(`
         UPDATE transactions
@@ -2125,6 +2175,7 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
         WHERE id = ? AND ${scopeWhere.clause}
       `).bind(nextSyncVersion, now, user.id, now, id, ...scopeWhere.params),
       ...inventoryBatch.statements,
+      ...carbonBatch.statements,
       auditInsertStatement(
         c.env.DB,
         user.id,
@@ -2132,7 +2183,7 @@ transactionsRoutes.delete('/:id', requirePermission(Permission.DELETE_TRANSACTIO
         'transactions',
         id,
         transactionOwnership,
-        auditDetails({ previousInventorySyncStatus: existing.inventory_sync_status }),
+        auditDetails({ previousInventorySyncStatus: existing.inventory_sync_status, carbonEntriesInvalidated: true }),
       ),
       ...automaticMovementAuditStatements(
         c.env.DB,

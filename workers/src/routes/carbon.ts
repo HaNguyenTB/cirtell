@@ -118,7 +118,7 @@ carbonRoutes.get('/entries', requirePermission(Permission.VIEW_CARBON), async (c
     const periodEnd = c.req.query('period_end');
 
     const params: any[] = [];
-    const conditions: string[] = [];
+    const conditions: string[] = ['e.is_active = 1'];
     appendScopeCondition(conditions, params, scopeContext, 'e.tenant_id', 'e.company_id');
 
     if (scope) {
@@ -455,6 +455,8 @@ carbonRoutes.post('/avoided-emissions/sync', requirePermission(Permission.EDIT_C
           source_movement_type
         FROM ghg_emission_entries
         WHERE source_type = 'transaction'
+          AND emission_kind = 'avoided'
+          AND is_active = 1
           AND transaction_id = ?
           AND part_id = ?
           AND calculation_method = ?
@@ -510,6 +512,11 @@ carbonRoutes.post('/avoided-emissions/sync', requirePermission(Permission.EDIT_C
             data_quality = ?,
             methodology_notes = ?,
             source_movement_type = ?,
+            emission_kind = 'avoided',
+            is_active = 1,
+            invalidated_at = NULL,
+            invalidated_by = NULL,
+            invalidation_reason = NULL,
             updated_at = ?
           WHERE id = ?
         `).bind(
@@ -537,8 +544,9 @@ carbonRoutes.post('/avoided-emissions/sync', requirePermission(Permission.EDIT_C
             emission_factor, emission_factor_unit, emission_factor_source,
             co2e_kg, reporting_period_start, reporting_period_end,
             data_quality, methodology_notes, source_type, transaction_id, part_id,
-            calculation_method, factor_source, source_movement_type
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            calculation_method, factor_source, source_movement_type,
+            emission_kind, is_active
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           id,
           candidate.tenant_id,
@@ -564,6 +572,8 @@ carbonRoutes.post('/avoided-emissions/sync', requirePermission(Permission.EDIT_C
           AVOIDED_EMISSIONS_METHOD,
           'parts.emission_factor_kg',
           candidate.movement_type,
+          'avoided',
+          1,
         ).run();
       }
     }
@@ -645,6 +655,13 @@ carbonRoutes.delete('/entries/:id', requirePermission(Permission.EDIT_CARBON), a
         company_id: string | null;
       }>();
     if (!existing) return c.json({ error: 'Entry not found' }, 404);
+    if (existing.source_type === 'transaction') {
+      return c.json({
+        success: false,
+        error: 'Transaction-generated carbon entries are managed by transaction lifecycle',
+        code: 'GENERATED_ENTRY_IMMUTABLE',
+      }, 409);
+    }
 
     await c.env.DB.prepare(`DELETE FROM ghg_emission_entries WHERE id = ? AND ${scopeWhere.clause}`)
       .bind(id, ...scopeWhere.params)
@@ -681,7 +698,7 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
     const periodEnd = c.req.query('period_end');
 
     const params: any[] = [];
-    const conditions: string[] = [];
+    const conditions: string[] = ['e.is_active = 1'];
     appendScopeCondition(conditions, params, scopeContext, 'e.tenant_id', 'e.company_id');
     if (periodStart) { conditions.push('e.reporting_period_end >= ?'); params.push(periodStart); }
     if (periodEnd) { conditions.push('e.reporting_period_start <= ?'); params.push(periodEnd); }
@@ -693,6 +710,7 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
         e.scope3_stream,
         e.category_id,
         COALESCE(e.source_type, 'manual') as source_type,
+        e.emission_kind,
         COALESCE(e.source_movement_type, t.movement_type) as movement_type,
         COUNT(*) as entry_count,
         SUM(e.co2e_kg) as total_co2e_kg,
@@ -703,21 +721,21 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
        AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
        AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
       ${where}
-      GROUP BY e.scope, e.scope3_stream, e.category_id, source_type, movement_type
+      GROUP BY e.scope, e.scope3_stream, e.category_id, source_type, e.emission_kind, movement_type
       ORDER BY e.scope, e.category_id, source_type
     `).bind(...params).all();
 
-    // Actual emissions are only manual entries. Transaction-generated avoided
-    // emissions are reported separately and never added to actual emissions.
+    // Manual entries and transaction-generated Purchases are actual emissions.
+    // Redeploy and Recycle entries are avoided emissions and remain separate.
     const totals = await c.env.DB.prepare(`
       SELECT
-        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 1 THEN e.co2e_kg ELSE 0 END), 0) as scope1_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 2 THEN e.co2e_kg ELSE 0 END), 0) as scope2_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' AND e.scope = 3 THEN e.co2e_kg ELSE 0 END), 0) as scope3_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(e.source_type, 'manual') = 'manual' THEN e.co2e_kg ELSE 0 END), 0) as total_kg,
-        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' THEN e.co2e_kg ELSE 0 END), 0) as avoided_co2e_kg,
-        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' AND COALESCE(e.source_movement_type, t.movement_type) = 'Redeploy' THEN e.co2e_kg ELSE 0 END), 0) as avoided_redeploy_kg,
-        COALESCE(SUM(CASE WHEN e.source_type = 'transaction' AND COALESCE(e.source_movement_type, t.movement_type) = 'Recycle' THEN e.co2e_kg ELSE 0 END), 0) as avoided_recycle_kg
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'actual' AND e.scope = 1 THEN e.co2e_kg ELSE 0 END), 0) as scope1_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'actual' AND e.scope = 2 THEN e.co2e_kg ELSE 0 END), 0) as scope2_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'actual' AND e.scope = 3 THEN e.co2e_kg ELSE 0 END), 0) as scope3_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'actual' THEN e.co2e_kg ELSE 0 END), 0) as total_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'avoided' THEN e.co2e_kg ELSE 0 END), 0) as avoided_co2e_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'avoided' AND COALESCE(e.source_movement_type, t.movement_type) = 'Redeploy' THEN e.co2e_kg ELSE 0 END), 0) as avoided_redeploy_kg,
+        COALESCE(SUM(CASE WHEN e.emission_kind = 'avoided' AND COALESCE(e.source_movement_type, t.movement_type) = 'Recycle' THEN e.co2e_kg ELSE 0 END), 0) as avoided_recycle_kg
       FROM ghg_emission_entries e
       LEFT JOIN transactions t
         ON t.id = e.transaction_id
@@ -736,7 +754,7 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
         COALESCE(SUM(e.activity_data), 0) AS total_activity
       FROM ghg_emission_entries e
       ${where}
-        AND COALESCE(e.source_type, 'manual') = 'manual'
+        AND e.emission_kind = 'actual'
       GROUP BY e.scope, e.scope3_stream, e.category_id
       ORDER BY e.scope, e.category_id
     `).bind(...params).all();
@@ -745,14 +763,14 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
       SELECT COUNT(*) AS entry_count
       FROM ghg_emission_entries e
       ${where}
-        AND COALESCE(e.source_type, 'manual') = 'manual'
+        AND e.emission_kind = 'actual'
     `).bind(...params).first<{ entry_count: number }>();
 
     const avoidedCount = await c.env.DB.prepare(`
       SELECT COUNT(*) AS entry_count
       FROM ghg_emission_entries e
       ${where}
-        AND e.source_type = 'transaction'
+        AND e.emission_kind = 'avoided'
     `).bind(...params).first<{ entry_count: number }>();
 
     const avoidedByMovement = await c.env.DB.prepare(`
@@ -766,7 +784,7 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
        AND (t.tenant_id = e.tenant_id OR (t.tenant_id IS NULL AND e.tenant_id IS NULL))
        AND (t.company_id = e.company_id OR (t.company_id IS NULL AND e.company_id IS NULL))
       ${where}
-        AND e.source_type = 'transaction'
+        AND e.emission_kind = 'avoided'
       GROUP BY movement_type
       ORDER BY movement_type
     `).bind(...params).all();
@@ -785,7 +803,7 @@ carbonRoutes.get('/report', requirePermission(Permission.VIEW_CARBON), async (c)
        AND (p.tenant_id = e.tenant_id OR (p.tenant_id IS NULL AND e.tenant_id IS NULL))
        AND (p.company_id = e.company_id OR (p.company_id IS NULL AND e.company_id IS NULL))
       ${where}
-        AND e.source_type = 'transaction'
+        AND e.emission_kind = 'avoided'
       GROUP BY e.part_id, p.part_number, p.model_name
       ORDER BY co2e_kg DESC, p.part_number
       LIMIT 20

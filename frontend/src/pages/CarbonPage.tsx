@@ -18,6 +18,8 @@ interface GhgEntry {
   reporting_period_end: string;
   data_quality: string;
   created_by_name: string | null;
+  source_type: 'manual' | 'transaction' | 'warehouse' | 'project';
+  emission_kind: 'actual' | 'avoided';
 }
 
 interface Scope3Cat {
@@ -424,9 +426,11 @@ export function CarbonPage() {
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3.5 text-right">
-                        <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-signal-teal">
-                          <Trash2 size={14} />
-                        </button>
+                        {e.source_type !== 'transaction' && (
+                          <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-gray-300 hover:text-signal-teal">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </td>
                     )}
                   </tr>

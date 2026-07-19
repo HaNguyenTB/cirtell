@@ -66,11 +66,11 @@ async function seedBase() {
   `);
   await run(`
     INSERT INTO parts (
-      id, tenant_id, company_id, part_number, model_name, category, created_at, updated_at
+      id, tenant_id, company_id, part_number, model_name, category, emission_factor_kg, created_at, updated_at
     ) VALUES
-      ('part_router', 'tenant_cirtell_default', 'company_cirtell_default', 'RTR-100', 'Router 100', 'Network Equipment', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
-      ('part_radio', 'tenant_cirtell_default', 'company_cirtell_default', 'RAD-200', 'Radio 200', 'Network Equipment', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
-      ('part_other', 'tenant_other', 'company_other', 'OTH-900', 'Other Tenant Part', 'Network Equipment', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+      ('part_router', 'tenant_cirtell_default', 'company_cirtell_default', 'RTR-100', 'Router 100', 'Network Equipment', 12.5, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+      ('part_radio', 'tenant_cirtell_default', 'company_cirtell_default', 'RAD-200', 'Radio 200', 'Network Equipment', 4, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+      ('part_other', 'tenant_other', 'company_other', 'OTH-900', 'Other Tenant Part', 'Network Equipment', 99, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
   `);
   await run(`
     INSERT INTO warehouses (
@@ -764,6 +764,143 @@ describe('warehouse inventory movement validation', () => {
     expect(await movementCount()).toBe(0);
     expect(await inventoryQty('wh_source', 'part_router')).toBe(0);
   });
+  it('records Purchase carbon as actual Scope 3 on the warehouse receipt date', async () => {
+    const transactionId = await createTransaction({
+      date: '2026-03-10',
+      movement_type: 'Purchase',
+      part_id: 'part_router',
+      quantity: 2,
+      destination_warehouse_id: 'wh_source',
+    });
+
+    const entry = await first<{
+      scope: number;
+      category_id: number;
+      scope3_stream: string;
+      activity_data: number;
+      emission_factor: number;
+      co2e_kg: number;
+      reporting_period_start: string;
+      reporting_period_end: string;
+      emission_kind: string;
+      is_active: number;
+      calculation_method: string;
+    }>(`
+      SELECT scope, category_id, scope3_stream, activity_data, emission_factor,
+        co2e_kg, reporting_period_start, reporting_period_end,
+        emission_kind, is_active, calculation_method
+      FROM ghg_emission_entries
+      WHERE transaction_id = ? AND part_id = ?
+    `, transactionId, 'part_router');
+
+    expect(entry).toEqual({
+      scope: 3,
+      category_id: 1,
+      scope3_stream: 'upstream',
+      activity_data: 2,
+      emission_factor: 12.5,
+      co2e_kg: 25,
+      reporting_period_start: '2026-03-10',
+      reporting_period_end: '2026-03-10',
+      emission_kind: 'actual',
+      is_active: 1,
+      calculation_method: 'purchase_scope3_v1',
+    });
+
+    const beforeReceipt = await api('GET', '/api/ghg/report?period_end=2026-03-09');
+    expect(beforeReceipt.json.actual.scope3_kg).toBe(0);
+
+    const receiptDay = await api('GET', '/api/ghg/report?period_start=2026-03-10&period_end=2026-03-10');
+    expect(receiptDay.json.actual.scope3_kg).toBe(25);
+    expect(receiptDay.json.avoided.total_co2e_kg).toBe(0);
+  });
+
+  it('records Redeploy and Recycle as avoided emissions without increasing actual Scope 3', async () => {
+    await seedInventory('inv_carbon_router', 'wh_source', null, 'part_router', 20);
+
+    await createTransaction({
+      date: '2026-03-11',
+      movement_type: 'Redeploy',
+      part_id: 'part_router',
+      quantity: 4,
+      source_warehouse_id: 'wh_source',
+      destination_warehouse_id: 'wh_dest',
+    });
+    await createTransaction({
+      date: '2026-03-12',
+      movement_type: 'Recycle',
+      part_id: 'part_router',
+      quantity: 2,
+      source_warehouse_id: 'wh_source',
+    });
+
+    const report = await api('GET', '/api/ghg/report?period_start=2026-03-01&period_end=2026-03-31');
+    expect(report.response.status).toBe(200);
+    expect(report.json.actual.scope3_kg).toBe(0);
+    expect(report.json.avoided.total_co2e_kg).toBe(75);
+    expect(report.json.totals.avoided_redeploy_kg).toBe(50);
+    expect(report.json.totals.avoided_recycle_kg).toBe(25);
+  });
+
+  it('rebuilds generated carbon on update and invalidates it on void', async () => {
+    await seedInventory('inv_reverse_router', 'wh_source', null, 'part_router', 20);
+    const transactionId = await createTransaction({
+      date: '2026-03-13',
+      movement_type: 'Redeploy',
+      part_id: 'part_router',
+      quantity: 4,
+      source_warehouse_id: 'wh_source',
+      destination_warehouse_id: 'wh_dest',
+    });
+
+    const updated = await api('PUT', `/api/transactions/${transactionId}`, { quantity: 6 });
+    expect(updated.response.status).toBe(200);
+    expect(updated.json.carbonEntries).toBe(1);
+
+    const versionsAfterUpdate = await all<{
+      activity_data: number;
+      co2e_kg: number;
+      is_active: number;
+      invalidation_reason: string | null;
+      source_transaction_version: number;
+    }>(`
+      SELECT activity_data, co2e_kg, is_active, invalidation_reason, source_transaction_version
+      FROM ghg_emission_entries
+      WHERE transaction_id = ?
+      ORDER BY created_at, id
+    `, transactionId);
+    expect(versionsAfterUpdate).toHaveLength(2);
+    expect(versionsAfterUpdate.filter((entry) => entry.is_active === 1)).toEqual([
+      expect.objectContaining({ activity_data: 6, co2e_kg: 75, source_transaction_version: 2 }),
+    ]);
+    expect(versionsAfterUpdate.filter((entry) => entry.is_active === 0)).toEqual([
+      expect.objectContaining({ activity_data: 4, co2e_kg: 50, invalidation_reason: 'transaction_update' }),
+    ]);
+
+    const voided = await api('DELETE', `/api/transactions/${transactionId}`);
+    expect(voided.response.status).toBe(200);
+    expect(await inventoryQty('wh_source', 'part_router')).toBe(20);
+    expect(await inventoryQty('wh_dest', 'part_router')).toBe(0);
+
+    const active = await first<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM ghg_emission_entries WHERE transaction_id = ? AND is_active = 1',
+      transactionId,
+    );
+    expect(active?.count).toBe(0);
+
+    const history = await all<{ invalidation_reason: string | null }>(
+      'SELECT invalidation_reason FROM ghg_emission_entries WHERE transaction_id = ? ORDER BY created_at, id',
+      transactionId,
+    );
+    expect(history.map((entry) => entry.invalidation_reason).sort()).toEqual([
+      'transaction_update',
+      'transaction_void',
+    ]);
+
+    const report = await api('GET', '/api/ghg/report?period_start=2026-03-13&period_end=2026-03-13');
+    expect(report.json.avoided.total_co2e_kg).toBe(0);
+  });
+
 });
 
 interface BackfillResult {

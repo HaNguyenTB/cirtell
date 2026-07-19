@@ -31,20 +31,20 @@ dashboardRoutes.get('/overview/headline', requirePermission(Permission.VIEW_DASH
         SUM(quantity) as total_units,
         SUM(CASE WHEN movement_type = 'Redeploy' THEN quantity ELSE 0 END) as reuse_units
       FROM transactions
-      WHERE ${transactionScope.clause}
+      WHERE voided_at IS NULL AND ${transactionScope.clause}
     `).bind(...transactionScope.params).first();
 
     const ghgTotals = await c.env.DB.prepare(`
       SELECT
-        COALESCE(SUM(CASE WHEN COALESCE(source_type, 'manual') = 'manual' AND scope = 1 THEN co2e_kg ELSE 0 END), 0) as scope1_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(source_type, 'manual') = 'manual' AND scope = 2 THEN co2e_kg ELSE 0 END), 0) as scope2_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(source_type, 'manual') = 'manual' AND scope = 3 THEN co2e_kg ELSE 0 END), 0) as scope3_kg,
-        COALESCE(SUM(CASE WHEN COALESCE(source_type, 'manual') = 'manual' THEN co2e_kg ELSE 0 END), 0) as actual_co2e_kg,
-        COALESCE(SUM(CASE WHEN source_type = 'transaction' THEN co2e_kg ELSE 0 END), 0) as avoided_co2e_kg,
-        COALESCE(SUM(CASE WHEN source_type = 'transaction' AND source_movement_type = 'Redeploy' THEN co2e_kg ELSE 0 END), 0) as avoided_redeploy_co2e_kg,
-        COALESCE(SUM(CASE WHEN source_type = 'transaction' AND source_movement_type = 'Recycle' THEN co2e_kg ELSE 0 END), 0) as avoided_recycle_co2e_kg
+        COALESCE(SUM(CASE WHEN emission_kind = 'actual' AND scope = 1 THEN co2e_kg ELSE 0 END), 0) as scope1_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'actual' AND scope = 2 THEN co2e_kg ELSE 0 END), 0) as scope2_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'actual' AND scope = 3 THEN co2e_kg ELSE 0 END), 0) as scope3_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'actual' THEN co2e_kg ELSE 0 END), 0) as actual_co2e_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'avoided' THEN co2e_kg ELSE 0 END), 0) as avoided_co2e_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'avoided' AND source_movement_type = 'Redeploy' THEN co2e_kg ELSE 0 END), 0) as avoided_redeploy_co2e_kg,
+        COALESCE(SUM(CASE WHEN emission_kind = 'avoided' AND source_movement_type = 'Recycle' THEN co2e_kg ELSE 0 END), 0) as avoided_recycle_co2e_kg
       FROM ghg_emission_entries
-      WHERE ${ghgScope.clause}
+      WHERE is_active = 1 AND ${ghgScope.clause}
     `).bind(...ghgScope.params).first();
 
     const partsCount = await c.env.DB.prepare(`SELECT COUNT(*) as total FROM parts WHERE ${partsScope.clause}`)
