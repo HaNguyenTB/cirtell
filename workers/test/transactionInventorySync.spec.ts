@@ -986,6 +986,66 @@ describe('warehouse inventory movement validation', () => {
       reporting_period_start: '2026-07-18',
     }));
   });
+  it('reconciles Redeploy line-item carbon without invalidating it away', async () => {
+    await seedInventory('inv_reconcile_redeploy', 'wh_source', null, 'part_router', 10);
+    const transactionId = await createTransaction({
+      date: '2026-07-19',
+      movement_type: 'Redeploy',
+      items: [
+        {
+          part_id: 'part_router',
+          quantity: 2,
+          source_warehouse_id: 'wh_source',
+          destination_warehouse_id: 'wh_dest',
+        },
+      ],
+    });
+
+    await run('DELETE FROM ghg_emission_entries WHERE transaction_id = ?', transactionId);
+
+    const synced = await api('POST', '/api/ghg/transaction-emissions/sync', {
+      transaction_id: transactionId,
+    });
+    expect(synced.response.status).toBe(200);
+    expect(synced.json.data).toEqual(expect.objectContaining({
+      transactionsScanned: 1,
+      rebuiltTransactions: 1,
+      generatedEntries: 1,
+      actualCo2eKg: 0,
+      avoidedCo2eKg: 25,
+      warnings: [],
+    }));
+
+    const active = await first<{
+      part_id: string;
+      activity_data: number;
+      co2e_kg: number;
+      emission_kind: string;
+      source_movement_type: string;
+      is_active: number;
+    }>(`
+      SELECT part_id, activity_data, co2e_kg, emission_kind, source_movement_type, is_active
+      FROM ghg_emission_entries
+      WHERE transaction_id = ? AND is_active = 1
+    `, transactionId);
+    expect(active).toEqual({
+      part_id: 'part_router',
+      activity_data: 2,
+      co2e_kg: 25,
+      emission_kind: 'avoided',
+      source_movement_type: 'Redeploy',
+      is_active: 1,
+    });
+
+    const secondSync = await api('POST', '/api/ghg/transaction-emissions/sync', {
+      transaction_id: transactionId,
+    });
+    expect(secondSync.json.data).toEqual(expect.objectContaining({
+      rebuiltTransactions: 0,
+      unchangedTransactions: 1,
+      generatedEntries: 0,
+    }));
+  });
 });
 
 interface BackfillResult {

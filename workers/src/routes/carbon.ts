@@ -771,7 +771,10 @@ carbonRoutes.post('/transaction-emissions/sync', requirePermission(Permission.ED
           quantity: transaction.quantity,
           inventorySyncStatus: transaction.voided_at ? 'voided' : transaction.inventory_sync_status,
           syncVersion: Number(transaction.inventory_sync_version || 0),
-          items: itemRows || [],
+          items: (itemRows || []).map((item) => ({
+            partId: item.part_id,
+            quantity: item.quantity,
+          })),
           createdBy: user.id,
           createdAt: now,
         },
