@@ -433,8 +433,8 @@ export function CarbonPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-gray-900 max-w-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate">{e.source_description}</span>
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                        <span className="min-w-0 truncate">{e.source_description}</span>
                         <span className="badge bg-deep-teal/10 text-deep-teal shrink-0">
                           {e.source_type === 'transaction' ? e.transaction_movement_type || 'Transaction' : 'Manual'}
                         </span>
