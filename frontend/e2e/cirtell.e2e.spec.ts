@@ -237,11 +237,23 @@ test('inventory and carbon workflows respect viewer permissions', async ({ brows
 
   await userPage.goto('/warehouse');
   await userPage.getByText('Main Warehouse').first().click();
+  await expect(userPage.getByRole('heading', { name: 'Warehouse Zones' })).toBeVisible();
+  await expect(userPage.getByText('Receiving', { exact: true })).toBeVisible();
+  await userPage.getByRole('button', { name: 'Add Zone', exact: true }).first().click();
+  const zoneForm = userPage.locator('form').filter({ hasText: 'Zone Name *' });
+  await zoneForm.getByPlaceholder('e.g., Storage A').fill('Inspection B');
+  await zoneForm.getByRole('combobox').selectOption('inspection');
+  await zoneForm.getByPlaceholder('Optional').fill('40');
+  await zoneForm.getByRole('button', { name: 'Create Zone' }).click();
+  await expect.poll(() => userSetup.state.requests.zoneCreates.length).toBe(1);
+  await expect(userPage.getByText('Inspection B', { exact: true })).toBeVisible();
+
   await userPage.getByRole('button', { name: /Add Stock/i }).click();
   const moveForm = userPage.locator('form').filter({ hasText: 'Part Number *' });
   await moveForm.getByPlaceholder('Search by part number or model...').fill('ANT');
   await moveForm.getByRole('button', { name: /ANT-001/ }).click({ force: true });
   await moveForm.getByRole('spinbutton').fill('5');
+  await moveForm.locator('select').last().selectOption('zone-4');
   await moveForm.getByRole('button', { name: /Submit Movement/i }).click();
 
   await expect.poll(() => userSetup.state.requests.inventoryMoves.length).toBe(1);
@@ -250,6 +262,7 @@ test('inventory and carbon workflows respect viewer permissions', async ({ brows
     part_id: 'part-antenna',
     quantity: 5,
     to_warehouse_id: 'warehouse-main',
+    to_zone_id: 'zone-4',
   });
   await expect(userPage.getByRole('cell', { name: '5', exact: true }).first()).toBeVisible();
 

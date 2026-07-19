@@ -769,3 +769,69 @@ describe('warehouse inventory movement validation', () => {
 interface BackfillResult {
   transactionId: string;
 }
+
+describe('warehouse zone route integration', () => {
+  it('creates a warehouse with an initial zone and exposes scoped zone management', async () => {
+    const created = await api('POST', '/api/warehouses', {
+      name: 'Zone Managed Warehouse',
+      code: 'ZONE-MANAGED',
+      capacity_units: 200,
+      initial_zone: {
+        name: 'Receiving A',
+        zone_type: 'receiving',
+        capacity_units: 50,
+      },
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.json.zoneId).toBeTruthy();
+
+    const listed = await api('GET', `/api/warehouses/zones/all?warehouse_id=${created.json.id}`);
+    expect(listed.response.status).toBe(200);
+    expect(listed.json.zones).toEqual([
+      expect.objectContaining({
+        id: created.json.zoneId,
+        warehouse_id: created.json.id,
+        name: 'Receiving A',
+        zone_type: 'receiving',
+        capacity_units: 50,
+        total_units: 0,
+      }),
+    ]);
+
+    const updated = await api('PUT', `/api/warehouses/${created.json.id}/zones/${created.json.zoneId}`, {
+      name: 'Inspection A',
+      zone_type: 'inspection',
+      capacity_units: 40,
+    });
+    expect(updated.response.status).toBe(200);
+    const zone = await first<{ name: string; zone_type: string; capacity_units: number }>(
+      'SELECT name, zone_type, capacity_units FROM warehouse_zones WHERE id = ?',
+      created.json.zoneId,
+    );
+    expect(zone).toEqual({ name: 'Inspection A', zone_type: 'inspection', capacity_units: 40 });
+  });
+
+  it('moves inventory between two zones in the same scoped warehouse', async () => {
+    await seedInventory('inv_zone_transfer_source', 'wh_source', 'zone_a', 'part_router', 6);
+
+    const moved = await createWarehouseMovement({
+      movement_type: 'Transfer',
+      part_id: 'part_router',
+      quantity: 2,
+      condition: 'Good',
+      from_warehouse_id: 'wh_source',
+      from_zone_id: 'zone_a',
+      to_warehouse_id: 'wh_source',
+      to_zone_id: 'zone_b',
+    });
+
+    expect(moved.response.status).toBe(201);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_a')).toBe(4);
+    expect(await inventoryQty('wh_source', 'part_router', 'Good', 'zone_b')).toBe(2);
+    const movement = await first<{ from_zone_id: string; to_zone_id: string }>(
+      'SELECT from_zone_id, to_zone_id FROM inventory_movements WHERE id = ?',
+      moved.json.id,
+    );
+    expect(movement).toEqual({ from_zone_id: 'zone_a', to_zone_id: 'zone_b' });
+  });
+});

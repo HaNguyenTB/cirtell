@@ -53,6 +53,28 @@ function isUniqueConstraintError(err: unknown, indexNames: string[]): boolean {
     || indexNames.some((name) => lower.includes(name.toLowerCase()));
 }
 
+const ZONE_TYPES = ['storage', 'staging', 'inspection', 'shipping', 'receiving'] as const;
+
+function normalizeZoneInput(body: Record<string, unknown>) {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const zoneType = typeof body.zone_type === 'string' ? body.zone_type.trim().toLowerCase() : 'storage';
+  const rawCapacity = body.capacity_units;
+  const capacityUnits = rawCapacity === '' || rawCapacity === null || rawCapacity === undefined
+    ? null
+    : Number(rawCapacity);
+  return { name, zoneType, capacityUnits };
+}
+
+function validateZoneInput(input: ReturnType<typeof normalizeZoneInput>): string | null {
+  if (!input.name) return 'Zone name is required';
+  if (!ZONE_TYPES.includes(input.zoneType as (typeof ZONE_TYPES)[number])) {
+    return `zone_type must be: ${ZONE_TYPES.join(', ')}`;
+  }
+  if (input.capacityUnits !== null && (!Number.isInteger(input.capacityUnits) || input.capacityUnits < 0)) {
+    return 'Zone capacity must be a non-negative integer';
+  }
+  return null;
+}
 // ============================================================================
 // WAREHOUSES
 // ============================================================================
@@ -83,6 +105,36 @@ warehouseRoutes.get('/', requirePermission(Permission.VIEW_WAREHOUSE), async (c)
   }
 });
 
+// GET /api/warehouses/zones/all - list scoped zones for selectors and management
+warehouseRoutes.get('/zones/all', requirePermission(Permission.VIEW_WAREHOUSE), async (c) => {
+  try {
+    const scope = await resolveTenantScope(c);
+    const warehouseId = c.req.query('warehouse_id');
+    const params: SQLValue[] = [];
+    const conditions: string[] = [];
+    appendScopeCondition(conditions, params, scope, 'z.tenant_id', 'z.company_id');
+    if (warehouseId) {
+      conditions.push('z.warehouse_id = ?');
+      params.push(warehouseId);
+    }
+
+    const { results } = await c.env.DB.prepare(`
+      SELECT z.*, w.name AS warehouse_name, w.code AS warehouse_code,
+        COALESCE(SUM(i.quantity), 0) AS total_units
+      FROM warehouse_zones z
+      JOIN warehouses w ON w.id = z.warehouse_id
+      LEFT JOIN inventory i ON i.zone_id = z.id
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY z.id
+      ORDER BY w.name, z.name
+    `).bind(...params).all();
+
+    return c.json({ success: true, zones: results || [] });
+  } catch (err) {
+    console.error('GET /warehouses/zones/all error:', err);
+    return c.json({ success: false, error: 'Failed to fetch warehouse zones' }, 500);
+  }
+});
 // GET /api/warehouses/:id
 warehouseRoutes.get('/:id', requirePermission(Permission.VIEW_WAREHOUSE), async (c) => {
   try {
@@ -124,21 +176,46 @@ warehouseRoutes.post('/', requirePermission(Permission.EDIT_WAREHOUSE), async (c
       .first();
     if (existing) return c.json(duplicateWarehouseCodeResponse(), 409);
 
+    const initialZoneBody = body.initial_zone && typeof body.initial_zone === 'object'
+      ? body.initial_zone as Record<string, unknown>
+      : null;
+    const initialZone = initialZoneBody?.name ? normalizeZoneInput(initialZoneBody) : null;
+    if (initialZone) {
+      const zoneError = validateZoneInput(initialZone);
+      if (zoneError) return c.json({ success: false, error: zoneError }, 400);
+    }
+
     const id = crypto.randomUUID();
+    const zoneId = initialZone ? crypto.randomUUID() : null;
     const now = new Date().toISOString();
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(`
+        INSERT INTO warehouses (id, tenant_id, company_id, name, code, address, city, country, capacity_units, status, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        id, ownership.tenantId, ownership.companyId, body.name.trim(), normalizedCode,
+        body.address?.trim() || null, body.city?.trim() || null, body.country?.trim() || null,
+        body.capacity_units || null, body.status || 'active', body.notes?.trim() || null,
+        now, now,
+      ),
+    ];
+    if (initialZone && zoneId) {
+      statements.push(c.env.DB.prepare(`
+        INSERT INTO warehouse_zones (id, tenant_id, company_id, warehouse_id, name, zone_type, capacity_units, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        zoneId, ownership.tenantId, ownership.companyId, id,
+        initialZone.name, initialZone.zoneType, initialZone.capacityUnits, now,
+      ));
+    }
+    await c.env.DB.batch(statements);
 
-    await c.env.DB.prepare(`
-      INSERT INTO warehouses (id, tenant_id, company_id, name, code, address, city, country, capacity_units, status, notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id, ownership.tenantId, ownership.companyId, body.name.trim(), normalizedCode,
-      body.address?.trim() || null, body.city?.trim() || null, body.country?.trim() || null,
-      body.capacity_units || null, body.status || 'active', body.notes?.trim() || null,
-      now, now,
-    ).run();
-
-    await logAudit(c.env.DB, user.id, 'CREATE_WAREHOUSE', 'warehouses', id);
-    return c.json({ success: true, id }, 201);
+    await logAudit(
+      c.env.DB, user.id, 'CREATE_WAREHOUSE', 'warehouses', id,
+      initialZone ? JSON.stringify({ initialZoneId: zoneId }) : undefined,
+      ownership.tenantId, ownership.companyId,
+    );
+    return c.json({ success: true, id, zoneId }, 201);
   } catch (err: any) {
     if (isUniqueConstraintError(err, ['ux_warehouses_scope_code'])) {
       return c.json(duplicateWarehouseCodeResponse(), 409);
@@ -219,26 +296,117 @@ warehouseRoutes.post('/:id/zones', requirePermission(Permission.EDIT_WAREHOUSE),
     const ownership = scopeInsertValues(scope, user);
     const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
     const warehouseId = c.req.param('id')!;
-    const body = await c.req.json();
-    if (!body.name?.trim()) return c.json({ success: false, error: 'Zone name is required' }, 400);
+    const input = normalizeZoneInput(await c.req.json<Record<string, unknown>>());
+    const validationError = validateZoneInput(input);
+    if (validationError) return c.json({ success: false, error: validationError }, 400);
 
-    const wh = await c.env.DB.prepare(`SELECT id FROM warehouses WHERE id = ? AND ${scopeWhere.clause}`)
+    const warehouse = await c.env.DB.prepare(`SELECT id FROM warehouses WHERE id = ? AND ${scopeWhere.clause}`)
       .bind(warehouseId, ...scopeWhere.params)
       .first();
-    if (!wh) return c.json({ success: false, error: 'Warehouse not found' }, 404);
+    if (!warehouse) return c.json({ success: false, error: 'Warehouse not found' }, 404);
+
+    const duplicate = await c.env.DB.prepare(`
+      SELECT id FROM warehouse_zones
+      WHERE warehouse_id = ? AND UPPER(TRIM(name)) = UPPER(TRIM(?)) AND ${scopeWhere.clause}
+    `).bind(warehouseId, input.name, ...scopeWhere.params).first();
+    if (duplicate) return c.json({ success: false, error: 'Zone name already exists in this warehouse', code: 'DUPLICATE_ZONE_NAME' }, 409);
 
     const id = crypto.randomUUID();
-    await c.env.DB.prepare(
-      'INSERT INTO warehouse_zones (id, tenant_id, company_id, warehouse_id, name, zone_type, capacity_units) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).bind(id, ownership.tenantId, ownership.companyId, warehouseId, body.name.trim(), body.zone_type || 'storage', body.capacity_units || null).run();
+    await c.env.DB.prepare(`
+      INSERT INTO warehouse_zones (id, tenant_id, company_id, warehouse_id, name, zone_type, capacity_units)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id, ownership.tenantId, ownership.companyId, warehouseId,
+      input.name, input.zoneType, input.capacityUnits,
+    ).run();
+    await logAudit(c.env.DB, user.id, 'CREATE_WAREHOUSE_ZONE', 'warehouse_zones', id, undefined, ownership.tenantId, ownership.companyId);
 
     return c.json({ success: true, id }, 201);
-  } catch (err: any) {
+  } catch (err) {
     console.error('POST /warehouses/:id/zones error:', err);
     return c.json({ success: false, error: 'Failed to create zone' }, 500);
   }
 });
 
+// PUT /api/warehouses/:id/zones/:zoneId
+warehouseRoutes.put('/:id/zones/:zoneId', requirePermission(Permission.EDIT_WAREHOUSE), async (c) => {
+  try {
+    const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const ownership = scopeInsertValues(scope, user);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const warehouseId = c.req.param('id')!;
+    const zoneId = c.req.param('zoneId')!;
+    const input = normalizeZoneInput(await c.req.json<Record<string, unknown>>());
+    const validationError = validateZoneInput(input);
+    if (validationError) return c.json({ success: false, error: validationError }, 400);
+
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM warehouse_zones
+      WHERE id = ? AND warehouse_id = ? AND ${scopeWhere.clause}
+    `).bind(zoneId, warehouseId, ...scopeWhere.params).first();
+    if (!existing) return c.json({ success: false, error: 'Warehouse zone not found' }, 404);
+
+    const duplicate = await c.env.DB.prepare(`
+      SELECT id FROM warehouse_zones
+      WHERE warehouse_id = ? AND id <> ?
+        AND UPPER(TRIM(name)) = UPPER(TRIM(?)) AND ${scopeWhere.clause}
+    `).bind(warehouseId, zoneId, input.name, ...scopeWhere.params).first();
+    if (duplicate) return c.json({ success: false, error: 'Zone name already exists in this warehouse', code: 'DUPLICATE_ZONE_NAME' }, 409);
+
+    await c.env.DB.prepare(`
+      UPDATE warehouse_zones SET name = ?, zone_type = ?, capacity_units = ?
+      WHERE id = ? AND warehouse_id = ? AND ${scopeWhere.clause}
+    `).bind(input.name, input.zoneType, input.capacityUnits, zoneId, warehouseId, ...scopeWhere.params).run();
+    await logAudit(c.env.DB, user.id, 'UPDATE_WAREHOUSE_ZONE', 'warehouse_zones', zoneId, undefined, ownership.tenantId, ownership.companyId);
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error('PUT /warehouses/:id/zones/:zoneId error:', err);
+    return c.json({ success: false, error: 'Failed to update zone' }, 500);
+  }
+});
+
+// DELETE /api/warehouses/:id/zones/:zoneId
+warehouseRoutes.delete('/:id/zones/:zoneId', requirePermission(Permission.EDIT_WAREHOUSE), async (c) => {
+  try {
+    const user = c.get('user');
+    const scope = await resolveTenantScope(c);
+    const ownership = scopeInsertValues(scope, user);
+    const scopeWhere = scopedWhere(scope, 'tenant_id', 'company_id');
+    const warehouseId = c.req.param('id')!;
+    const zoneId = c.req.param('zoneId')!;
+
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM warehouse_zones
+      WHERE id = ? AND warehouse_id = ? AND ${scopeWhere.clause}
+    `).bind(zoneId, warehouseId, ...scopeWhere.params).first();
+    if (!existing) return c.json({ success: false, error: 'Warehouse zone not found' }, 404);
+
+    const usage = await c.env.DB.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM inventory WHERE zone_id = ?) AS inventory_count,
+        (SELECT COUNT(*) FROM inventory_movements WHERE from_zone_id = ? OR to_zone_id = ?) AS movement_count
+    `).bind(zoneId, zoneId, zoneId).first<{ inventory_count: number; movement_count: number }>();
+    if ((usage?.inventory_count || 0) > 0 || (usage?.movement_count || 0) > 0) {
+      return c.json({
+        success: false,
+        error: 'Zone cannot be deleted because it has inventory or movement history',
+        code: 'ZONE_IN_USE',
+      }, 409);
+    }
+
+    await c.env.DB.prepare(`
+      DELETE FROM warehouse_zones WHERE id = ? AND warehouse_id = ? AND ${scopeWhere.clause}
+    `).bind(zoneId, warehouseId, ...scopeWhere.params).run();
+    await logAudit(c.env.DB, user.id, 'DELETE_WAREHOUSE_ZONE', 'warehouse_zones', zoneId, undefined, ownership.tenantId, ownership.companyId);
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /warehouses/:id/zones/:zoneId error:', err);
+    return c.json({ success: false, error: 'Failed to delete zone' }, 500);
+  }
+});
 // ============================================================================
 // INVENTORY
 // ============================================================================
@@ -265,7 +433,7 @@ warehouseRoutes.get('/inventory/all', requirePermission(Permission.VIEW_WAREHOUS
     const where = `WHERE ${conditions.join(' AND ')}`;
 
     const { results } = await c.env.DB.prepare(`
-      SELECT i.id, i.quantity, i.condition, i.last_counted_at, i.updated_at,
+      SELECT i.id, i.warehouse_id, i.zone_id, i.part_id, i.quantity, i.condition, i.last_counted_at, i.updated_at,
         w.name as warehouse_name, w.code as warehouse_code,
         z.name as zone_name,
         p.part_number, p.model_name, p.category

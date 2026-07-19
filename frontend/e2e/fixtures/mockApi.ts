@@ -69,9 +69,22 @@ interface MockWarehouse {
   total_units?: number;
 }
 
+interface MockZone {
+  id: string;
+  warehouse_id: string;
+  warehouse_name: string;
+  warehouse_code: string;
+  name: string;
+  zone_type: string;
+  capacity_units: number | null;
+  total_units: number;
+  created_at: string;
+}
 interface MockInventoryItem {
   id: string;
   warehouse_id?: string;
+  zone_id?: string | null;
+  zone_name?: string | null;
   warehouse_name: string;
   warehouse_code: string;
   part_id: string;
@@ -89,7 +102,9 @@ interface MockMovement {
   quantity: number;
   condition: string;
   from_warehouse_name: string | null;
+  from_zone_name: string | null;
   to_warehouse_name: string | null;
+  to_zone_name: string | null;
   reference: string | null;
   notes: string | null;
   created_at: string;
@@ -134,6 +149,7 @@ export interface MockState {
   parts: MockPart[];
   transactions: MockTransaction[];
   warehouses: MockWarehouse[];
+  zones: MockZone[];
   inventory: MockInventoryItem[];
   movements: MockMovement[];
   projects: MockProject[];
@@ -144,6 +160,7 @@ export interface MockState {
     transactionCreates: unknown[];
     poUploads: Array<{ url: string; fileName: string | null; contentType: string | null }>;
     inventoryMoves: unknown[];
+    zoneCreates: unknown[];
     ghgCreates: unknown[];
   };
 }
@@ -265,6 +282,41 @@ export function createMockState(): MockState {
     },
   ];
 
+  const zones: MockZone[] = [
+    {
+      id: 'zone-receiving',
+      warehouse_id: 'warehouse-main',
+      warehouse_name: 'Main Warehouse',
+      warehouse_code: 'WH-HN',
+      name: 'Receiving',
+      zone_type: 'receiving',
+      capacity_units: 100,
+      total_units: 20,
+      created_at: '2026-06-01T08:00:00Z',
+    },
+    {
+      id: 'zone-storage',
+      warehouse_id: 'warehouse-main',
+      warehouse_name: 'Main Warehouse',
+      warehouse_code: 'WH-HN',
+      name: 'Storage A',
+      zone_type: 'storage',
+      capacity_units: 300,
+      total_units: 0,
+      created_at: '2026-06-01T08:00:00Z',
+    },
+    {
+      id: 'zone-reuse',
+      warehouse_id: 'warehouse-reuse',
+      warehouse_name: 'Reuse Hub',
+      warehouse_code: 'WH-RU',
+      name: 'Reuse Storage',
+      zone_type: 'storage',
+      capacity_units: 200,
+      total_units: 5,
+      created_at: '2026-06-01T08:00:00Z',
+    },
+  ];
   const projects: MockProject[] = [
     {
       id: 'project-1',
@@ -287,11 +339,14 @@ export function createMockState(): MockState {
   return {
     parts,
     warehouses,
+    zones,
     projects,
     inventory: [
       {
         id: 'inventory-1',
         warehouse_id: 'warehouse-main',
+        zone_id: 'zone-receiving',
+        zone_name: 'Receiving',
         warehouse_name: 'Main Warehouse',
         warehouse_code: 'WH-HN',
         part_id: 'part-antenna',
@@ -310,7 +365,9 @@ export function createMockState(): MockState {
         quantity: 20,
         condition: 'NIB',
         from_warehouse_name: null,
+        from_zone_name: null,
         to_warehouse_name: 'Main Warehouse',
+        to_zone_name: 'Receiving',
         reference: 'PO-2026-001',
         notes: 'Initial stock',
         created_at: '2026-06-12T08:00:00Z',
@@ -411,6 +468,7 @@ export function createMockState(): MockState {
       transactionCreates: [],
       poUploads: [],
       inventoryMoves: [],
+      zoneCreates: [],
       ghgCreates: [],
     },
   };
@@ -865,6 +923,48 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     return;
   }
 
+  if (path === '/api/warehouses/zones/all' && method === 'GET') {
+    const warehouseId = url.searchParams.get('warehouse_id');
+    await respond(route, {
+      success: true,
+      zones: warehouseId ? state.zones.filter((zone) => zone.warehouse_id === warehouseId) : state.zones,
+    });
+    return;
+  }
+
+  if (/^\/api\/warehouses\/[^/]+\/zones$/.test(path) && method === 'POST') {
+    const body = await readJson(request);
+    state.requests.zoneCreates.push(body);
+    const warehouseId = path.split('/')[3];
+    const warehouse = state.warehouses.find((item) => item.id === warehouseId);
+    const zone: MockZone = {
+      id: `zone-${state.zones.length + 1}`,
+      warehouse_id: warehouseId,
+      warehouse_name: warehouse?.name || 'Unknown Warehouse',
+      warehouse_code: warehouse?.code || 'UNKNOWN',
+      name: String(body.name || 'New Zone'),
+      zone_type: String(body.zone_type || 'storage'),
+      capacity_units: body.capacity_units === null || body.capacity_units === undefined ? null : Number(body.capacity_units),
+      total_units: 0,
+      created_at: '2026-06-23T08:00:00Z',
+    };
+    state.zones.push(zone);
+    if (warehouse) warehouse.zone_count = (warehouse.zone_count || 0) + 1;
+    await respond(route, { success: true, id: zone.id }, 201);
+    return;
+  }
+
+  if (/^\/api\/warehouses\/[^/]+\/zones\/[^/]+$/.test(path) && method === 'PUT') {
+    const body = await readJson(request);
+    const zone = state.zones.find((item) => item.id === path.split('/')[5]);
+    if (zone) {
+      zone.name = String(body.name || zone.name);
+      zone.zone_type = String(body.zone_type || zone.zone_type);
+      zone.capacity_units = body.capacity_units === null || body.capacity_units === undefined ? null : Number(body.capacity_units);
+    }
+    await respond(route, { success: true });
+    return;
+  }
   if (path === '/api/warehouses/inventory/all') {
     await respond(route, { success: true, inventory: state.inventory });
     return;
@@ -892,6 +992,8 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     const toWarehouse = state.warehouses.find((candidate) => candidate.id === body.to_warehouse_id);
     const fromWarehouse = state.warehouses.find((candidate) => candidate.id === body.from_warehouse_id);
     const quantity = Number(body.quantity || 0);
+    const fromZone = state.zones.find((candidate) => candidate.id === body.from_zone_id);
+    const toZone = state.zones.find((candidate) => candidate.id === body.to_zone_id);
     const movement: MockMovement = {
       id: `movement-${state.movements.length + 1}`,
       movement_type: body.movement_type || 'Receive',
@@ -899,7 +1001,9 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
       quantity,
       condition: body.condition || 'NIB',
       from_warehouse_name: fromWarehouse?.name || null,
+      from_zone_name: fromZone?.name || null,
       to_warehouse_name: toWarehouse?.name || null,
+      to_zone_name: toZone?.name || null,
       reference: nullableText(body.reference),
       notes: nullableText(body.notes),
       created_at: '2026-06-23T08:00:00Z',
@@ -909,6 +1013,8 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
       state.inventory.unshift({
         id: `inventory-${state.inventory.length + 1}`,
         warehouse_id: toWarehouse.id,
+        zone_id: toZone?.id || null,
+        zone_name: toZone?.name || null,
         warehouse_name: toWarehouse.name,
         warehouse_code: toWarehouse.code,
         part_id: part.id,

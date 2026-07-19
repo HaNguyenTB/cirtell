@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Layers,
   Loader2,
+  MapPinned,
   MapPin,
   Package,
   Pencil,
@@ -33,8 +34,23 @@ interface WarehouseItem {
   total_units: number;
 }
 
+interface WarehouseZone {
+  id: string;
+  warehouse_id: string;
+  warehouse_name: string;
+  warehouse_code: string;
+  name: string;
+  zone_type: string;
+  capacity_units: number | null;
+  total_units: number;
+  created_at: string;
+}
+
 interface InventoryItem {
   id: string;
+  warehouse_id: string;
+  zone_id: string | null;
+  part_id: string;
   quantity: number;
   condition: string;
   warehouse_name: string;
@@ -50,7 +66,9 @@ interface Movement {
   movement_type: string;
   quantity: number;
   from_warehouse_name: string | null;
+  from_zone_name: string | null;
   to_warehouse_name: string | null;
+  to_zone_name: string | null;
   part_number: string;
   model_name: string | null;
   created_by_name: string | null;
@@ -75,6 +93,15 @@ interface WarehouseForm {
   capacity_units: string;
   status: string;
   notes: string;
+  initial_zone_name: string;
+  initial_zone_type: string;
+  initial_zone_capacity: string;
+}
+
+interface ZoneForm {
+  name: string;
+  zone_type: string;
+  capacity_units: string;
 }
 
 interface MoveForm {
@@ -83,7 +110,9 @@ interface MoveForm {
   quantity: string;
   movement_type: string;
   from_warehouse_id: string;
+  from_zone_id: string;
   to_warehouse_id: string;
+  to_zone_id: string;
   condition: string;
   reference: string;
   notes: string;
@@ -109,6 +138,7 @@ interface PartStockGroup {
 }
 
 const CONDITIONS = ['New', 'Good', 'Fair', 'Poor', 'Scrap'] as const;
+const ZONE_TYPES = ['storage', 'staging', 'inspection', 'shipping', 'receiving'] as const;
 
 const emptyWarehouseForm: WarehouseForm = {
   name: '',
@@ -119,6 +149,15 @@ const emptyWarehouseForm: WarehouseForm = {
   capacity_units: '',
   status: 'active',
   notes: '',
+  initial_zone_name: '',
+  initial_zone_type: 'storage',
+  initial_zone_capacity: '',
+};
+
+const emptyZoneForm: ZoneForm = {
+  name: '',
+  zone_type: 'storage',
+  capacity_units: '',
 };
 
 const emptyMoveForm: MoveForm = {
@@ -127,7 +166,9 @@ const emptyMoveForm: MoveForm = {
   quantity: '',
   movement_type: 'Receive',
   from_warehouse_id: '',
+  from_zone_id: '',
   to_warehouse_id: '',
+  to_zone_id: '',
   condition: 'Good',
   reference: '',
   notes: '',
@@ -158,6 +199,11 @@ function formatNumber(value: number | null | undefined) {
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatMovementLocation(warehouse: string | null, zone: string | null) {
+  if (!warehouse) return '-';
+  return zone ? `${warehouse} / ${zone}` : `${warehouse} / Warehouse level`;
 }
 
 function normalize(value: string | null | undefined) {
@@ -240,6 +286,7 @@ export function WarehousePage() {
   const canEdit = user?.role === 'Admin' || user?.role === 'User';
 
   const [warehouses, setWarehouses] = useState<WarehouseItem[]>([]);
+  const [zones, setZones] = useState<WarehouseZone[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -256,6 +303,10 @@ export function WarehousePage() {
   const [whForm, setWhForm] = useState<WarehouseForm>(emptyWarehouseForm);
   const [editWhId, setEditWhId] = useState<string | null>(null);
 
+  const [showZoneForm, setShowZoneForm] = useState(false);
+  const [zoneForm, setZoneForm] = useState<ZoneForm>(emptyZoneForm);
+  const [editZoneId, setEditZoneId] = useState<string | null>(null);
+
   const [showMoveForm, setShowMoveForm] = useState(false);
   const [moveForm, setMoveForm] = useState<MoveForm>(emptyMoveForm);
   const [partOptions, setPartOptions] = useState<PartOption[]>([]);
@@ -270,8 +321,9 @@ export function WarehousePage() {
     setError('');
 
     try {
-      const [warehousesResult, inventoryResult, movementsResult] = await Promise.allSettled([
+      const [warehousesResult, zonesResult, inventoryResult, movementsResult] = await Promise.allSettled([
         apiRequest<{ success: boolean; warehouses: WarehouseItem[] }>('/api/warehouses'),
+        apiRequest<{ success: boolean; zones: WarehouseZone[] }>('/api/warehouses/zones/all'),
         apiRequest<{ success: boolean; inventory: InventoryItem[] }>('/api/warehouses/inventory/all'),
         apiRequest<{ success: boolean; movements: Movement[] }>('/api/warehouses/movements/list'),
       ]);
@@ -284,6 +336,10 @@ export function WarehousePage() {
         });
       } else {
         throw warehousesResult.reason;
+      }
+
+      if (zonesResult.status === 'fulfilled') {
+        setZones(zonesResult.value.zones || []);
       }
 
       if (inventoryResult.status === 'fulfilled') {
@@ -339,6 +395,11 @@ export function WarehousePage() {
     return map;
   }, [inventory]);
 
+  const selectedZones = useMemo(
+    () => zones.filter((zone) => zone.warehouse_id === selectedWarehouse?.id),
+    [selectedWarehouse, zones],
+  );
+
   const selectedInventory = useMemo(
     () => getWarehouseInventory(selectedWarehouse, inventory),
     [inventory, selectedWarehouse],
@@ -382,6 +443,9 @@ export function WarehousePage() {
         capacity_units: warehouse.capacity_units?.toString() || '',
         status: warehouse.status,
         notes: warehouse.notes || '',
+        initial_zone_name: '',
+        initial_zone_type: 'storage',
+        initial_zone_capacity: '',
       });
       setEditWhId(warehouse.id);
     } else {
@@ -391,6 +455,44 @@ export function WarehousePage() {
     setShowWhForm(true);
   };
 
+  const openZoneModal = (zone?: WarehouseZone) => {
+    setError('');
+    setZoneForm(zone ? {
+      name: zone.name,
+      zone_type: zone.zone_type,
+      capacity_units: zone.capacity_units?.toString() || '',
+    } : emptyZoneForm);
+    setEditZoneId(zone?.id || null);
+    setShowZoneForm(true);
+  };
+
+  const saveZone = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedWarehouse) return;
+    setSaving(true);
+    setError('');
+    try {
+      const body = {
+        name: zoneForm.name,
+        zone_type: zoneForm.zone_type,
+        capacity_units: zoneForm.capacity_units ? parseInt(zoneForm.capacity_units) : null,
+      };
+      await apiRequest(
+        editZoneId
+          ? `/api/warehouses/${selectedWarehouse.id}/zones/${editZoneId}`
+          : `/api/warehouses/${selectedWarehouse.id}/zones`,
+        { method: editZoneId ? 'PUT' : 'POST', body },
+      );
+      setShowZoneForm(false);
+      setZoneForm(emptyZoneForm);
+      setEditZoneId(null);
+      await loadData(true);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save warehouse zone'));
+    } finally {
+      setSaving(false);
+    }
+  };
   const openMoveModal = (warehouse?: WarehouseItem | null, movementType = 'Receive') => {
     setError('');
     setMoveForm({
@@ -411,9 +513,22 @@ export function WarehousePage() {
     setError('');
 
     try {
-      const body: Record<string, unknown> = { ...whForm };
+      const {
+        initial_zone_name,
+        initial_zone_type,
+        initial_zone_capacity,
+        ...warehouseFields
+      } = whForm;
+      const body: Record<string, unknown> = { ...warehouseFields };
       if (whForm.capacity_units) body.capacity_units = parseInt(whForm.capacity_units);
       else delete body.capacity_units;
+      if (!editWhId && initial_zone_name.trim()) {
+        body.initial_zone = {
+          name: initial_zone_name.trim(),
+          zone_type: initial_zone_type,
+          capacity_units: initial_zone_capacity ? parseInt(initial_zone_capacity) : null,
+        };
+      }
 
       if (editWhId) {
         await apiRequest(`/api/warehouses/${editWhId}`, { method: 'PUT', body });
@@ -444,7 +559,9 @@ export function WarehousePage() {
           ...moveForm,
           quantity: parseInt(moveForm.quantity),
           from_warehouse_id: moveForm.from_warehouse_id || undefined,
+          from_zone_id: moveForm.from_zone_id || undefined,
           to_warehouse_id: moveForm.to_warehouse_id || undefined,
+          to_zone_id: moveForm.to_zone_id || undefined,
         },
       });
       setShowMoveForm(false);
@@ -485,14 +602,18 @@ export function WarehousePage() {
         <WarehouseDetailHeader
           warehouse={selectedWarehouse}
           partTypeCount={buildPartGroups(selectedInventory).length}
+          zoneCount={selectedZones.length}
           conditionCounts={selectedConditionCounts}
           activeCondition={filterCondition}
           onConditionChange={(condition) => setFilterCondition(filterCondition === condition ? 'all' : condition)}
           onOpenStock={() => openMoveModal(selectedWarehouse, 'Receive')}
+          onOpenZone={() => openZoneModal()}
           canEdit={canEdit}
         />
 
         {error && <ErrorBanner message={error} />}
+
+        <ZoneManagement zones={selectedZones} canEdit={canEdit} onAdd={() => openZoneModal()} onEdit={openZoneModal} />
 
         <div className="bg-white rounded-apple-lg shadow-none border border-gray-100 p-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -583,10 +704,22 @@ export function WarehousePage() {
           />
         )}
 
+        {showZoneForm && (
+          <ZoneFormModal
+            form={zoneForm}
+            editing={!!editZoneId}
+            saving={saving}
+            onChange={(updates) => setZoneForm((current) => ({ ...current, ...updates }))}
+            onClose={() => setShowZoneForm(false)}
+            onSubmit={saveZone}
+          />
+        )}
+
         {showMoveForm && (
           <MoveInventoryModal
             form={moveForm}
             warehouses={warehouses}
+            zones={zones}
             partOptions={partOptions}
             partSearching={partSearching}
             partSearchText={partSearchText}
@@ -710,6 +843,7 @@ export function WarehousePage() {
         <MoveInventoryModal
           form={moveForm}
           warehouses={warehouses}
+          zones={zones}
           partOptions={partOptions}
           partSearching={partSearching}
           partSearchText={partSearchText}
@@ -954,19 +1088,23 @@ function WarehouseCard({
 function WarehouseDetailHeader({
   warehouse,
   partTypeCount,
+  zoneCount,
   conditionCounts,
   activeCondition,
   canEdit,
   onConditionChange,
   onOpenStock,
+  onOpenZone,
 }: {
   warehouse: WarehouseItem;
   partTypeCount: number;
+  zoneCount: number;
   conditionCounts: Record<string, number>;
   activeCondition: string;
   canEdit: boolean;
   onConditionChange: (condition: string) => void;
   onOpenStock: () => void;
+  onOpenZone: () => void;
 }) {
   return (
     <div className="rounded-apple-lg p-6 text-white shadow-apple bg-deep-teal">
@@ -1005,15 +1143,28 @@ function WarehouseDetailHeader({
             <p className="text-tile font-semibold">{formatNumber(warehouse.capacity_units)}</p>
             <p className="text-caption text-white/70">Capacity</p>
           </div>
+          <div className="text-center">
+            <p className="text-tile font-semibold">{zoneCount}</p>
+            <p className="text-caption text-white/70">Zones</p>
+          </div>
 
           {canEdit && (
-            <button
-              onClick={onOpenStock}
-              className="ml-0 sm:ml-4 flex items-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-apple-md text-white font-medium transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Add Stock
-            </button>
+            <div className="ml-0 sm:ml-4 flex items-center gap-2">
+              <button
+                onClick={onOpenZone}
+                className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 rounded-apple-md text-white font-medium transition-colors"
+              >
+                <MapPinned className="h-4 w-4" />
+                Add Zone
+              </button>
+              <button
+                onClick={onOpenStock}
+                className="flex items-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-apple-md text-white font-medium transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                Add Stock
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1049,6 +1200,62 @@ function WarehouseDetailHeader({
   );
 }
 
+function ZoneManagement({
+  zones,
+  canEdit,
+  onAdd,
+  onEdit,
+}: {
+  zones: WarehouseZone[];
+  canEdit: boolean;
+  onAdd: () => void;
+  onEdit: (zone: WarehouseZone) => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-apple-lg border border-gray-100 bg-white">
+      <div className="flex items-center justify-between gap-4 border-b border-gray-100 px-5 py-4">
+        <div>
+          <h2 className="text-sub-heading font-semibold text-gray-900">Warehouse Zones</h2>
+          <p className="mt-0.5 text-caption text-gray-500">Physical storage, staging, inspection, shipping, and receiving areas.</p>
+        </div>
+        {canEdit && (
+          <button type="button" onClick={onAdd} className="btn-secondary">
+            <Plus className="h-4 w-4" />
+            Add Zone
+          </button>
+        )}
+      </div>
+      {zones.length === 0 ? (
+        <div className="px-5 py-8 text-center">
+          <MapPinned className="mx-auto mb-2 h-9 w-9 text-gray-300" />
+          <p className="text-caption text-gray-500">No zones configured. Stock will use the warehouse-level bucket.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 divide-y divide-gray-100 md:grid-cols-2 md:divide-x md:divide-y-0 xl:grid-cols-3">
+          {zones.map((zone) => (
+            <div key={zone.id} className="flex items-center justify-between gap-3 px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <MapPinned className="h-4 w-4 shrink-0 text-signal-teal" />
+                  <p className="truncate font-medium text-gray-900">{zone.name}</p>
+                </div>
+                <p className="mt-1 text-micro capitalize text-gray-500">
+                  {zone.zone_type} · {formatNumber(zone.total_units)} units
+                  {zone.capacity_units !== null ? ` / ${formatNumber(zone.capacity_units)} capacity` : ''}
+                </p>
+              </div>
+              {canEdit && (
+                <button type="button" onClick={() => onEdit(zone)} className="rounded p-1.5 text-gray-400 hover:bg-signal-teal/10 hover:text-signal-teal" title={`Edit ${zone.name}`}>
+                  <Pencil className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 function PartStockRow({ group, isExpanded, onToggle }: { group: PartStockGroup; isExpanded: boolean; onToggle: () => void }) {
   return (
     <div>
@@ -1090,7 +1297,7 @@ function PartStockRow({ group, isExpanded, onToggle }: { group: PartStockGroup; 
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-mono text-caption text-gray-700">{row.part_number}</span>
-                    {row.zone_name && <span className="text-caption text-gray-500">Zone: {row.zone_name}</span>}
+                    <span className="text-caption text-gray-500">Zone: {row.zone_name || 'Warehouse level'}</span>
                     <span className={`px-1.5 py-0.5 rounded text-micro font-medium ${conditionStyles[row.condition] || conditionStyles.Good}`}>
                       {row.condition}
                     </span>
@@ -1149,8 +1356,8 @@ function RecentMovements({ movements, title }: { movements: Movement[]; title: s
                     {movement.model_name && <p className="text-xs text-gray-400">{movement.model_name}</p>}
                   </td>
                   <td className="px-4 py-3.5 text-right font-semibold tabular-nums">{formatNumber(movement.quantity)}</td>
-                  <td className="px-4 py-3.5 text-gray-500">{movement.from_warehouse_name || '-'}</td>
-                  <td className="px-4 py-3.5 text-gray-500">{movement.to_warehouse_name || '-'}</td>
+                  <td className="px-4 py-3.5 text-gray-500">{formatMovementLocation(movement.from_warehouse_name, movement.from_zone_name)}</td>
+                  <td className="px-4 py-3.5 text-gray-500">{formatMovementLocation(movement.to_warehouse_name, movement.to_zone_name)}</td>
                   <td className="px-4 py-3.5 text-gray-400 text-xs">{movement.created_by_name || '-'}</td>
                 </tr>
               ))}
@@ -1267,6 +1474,44 @@ function WarehouseFormModal({
             </Field>
           </div>
 
+          {!editing && (
+            <div className="space-y-4 border-t border-gray-100 pt-5">
+              <div>
+                <h3 className="text-caption font-semibold text-gray-900">Initial Zone</h3>
+                <p className="text-micro text-gray-500">Optional. More zones can be added from the warehouse detail page.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Field label="Zone Name">
+                  <input
+                    type="text"
+                    value={form.initial_zone_name}
+                    onChange={(event) => onChange({ initial_zone_name: event.target.value })}
+                    placeholder="e.g., Receiving A"
+                    className="input-base"
+                  />
+                </Field>
+                <Field label="Zone Type">
+                  <select
+                    value={form.initial_zone_type}
+                    onChange={(event) => onChange({ initial_zone_type: event.target.value })}
+                    className="input-base capitalize"
+                  >
+                    {ZONE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </Field>
+                <Field label="Zone Capacity">
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.initial_zone_capacity}
+                    onChange={(event) => onChange({ initial_zone_capacity: event.target.value })}
+                    placeholder="Optional"
+                    className="input-base"
+                  />
+                </Field>
+              </div>
+            </div>
+          )}
           <Field label="Notes">
             <textarea
               value={form.notes}
@@ -1297,9 +1542,64 @@ function WarehouseFormModal({
   );
 }
 
+function ZoneFormModal({
+  form,
+  editing,
+  saving,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  form: ZoneForm;
+  editing: boolean;
+  saving: boolean;
+  onChange: (updates: Partial<ZoneForm>) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="mx-4 w-full max-w-lg rounded-apple-lg bg-white shadow-apple" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-gray-100 p-6">
+          <div>
+            <h2 className="text-sub-heading font-bold text-gray-900">{editing ? 'Edit Zone' : 'Add Zone'}</h2>
+            <p className="mt-1 text-caption text-gray-500">Define a physical area within this warehouse.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-apple p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <form onSubmit={onSubmit} className="space-y-5 p-6">
+          <Field label="Zone Name *">
+            <input value={form.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="e.g., Storage A" required className="input-base" />
+          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Zone Type *">
+              <select value={form.zone_type} onChange={(event) => onChange({ zone_type: event.target.value })} className="input-base capitalize">
+                {ZONE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </Field>
+            <Field label="Capacity Units">
+              <input type="number" min="0" value={form.capacity_units} onChange={(event) => onChange({ capacity_units: event.target.value })} placeholder="Optional" className="input-base" />
+            </Field>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} disabled={saving} className="rounded-apple-md px-5 py-2.5 text-gray-700 hover:bg-gray-100">Cancel</button>
+            <button type="submit" disabled={saving || !form.name.trim()} className="flex items-center gap-2 rounded-apple-md bg-signal-teal px-5 py-2.5 text-white hover:bg-signal-teal/90 disabled:opacity-50">
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {editing ? 'Update Zone' : 'Create Zone'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 function MoveInventoryModal({
   form,
   warehouses,
+  zones,
   partOptions,
   partSearching,
   partSearchText,
@@ -1314,6 +1614,7 @@ function MoveInventoryModal({
 }: {
   form: MoveForm;
   warehouses: WarehouseItem[];
+  zones: WarehouseZone[];
   partOptions: PartOption[];
   partSearching: boolean;
   partSearchText: string;
@@ -1350,7 +1651,7 @@ function MoveInventoryModal({
                 <button
                   key={type}
                   type="button"
-                  onClick={() => onChange({ movement_type: type })}
+                  onClick={() => onChange({ movement_type: type, from_zone_id: '', to_zone_id: '' })}
                   className={`px-3 py-2.5 rounded-apple-md text-caption font-medium border transition-colors ${
                     form.movement_type === type
                       ? 'bg-signal-teal text-white border-signal-teal'
@@ -1430,7 +1731,7 @@ function MoveInventoryModal({
               <WarehouseSelect
                 value={form.from_warehouse_id}
                 warehouses={warehouses}
-                onChange={(value) => onChange({ from_warehouse_id: value })}
+                onChange={(value) => onChange({ from_warehouse_id: value, from_zone_id: '' })}
                 required={needsSource}
               />
             </Field>
@@ -1438,8 +1739,29 @@ function MoveInventoryModal({
               <WarehouseSelect
                 value={form.to_warehouse_id}
                 warehouses={warehouses}
-                onChange={(value) => onChange({ to_warehouse_id: value })}
+                onChange={(value) => onChange({ to_warehouse_id: value, to_zone_id: '' })}
                 required={needsDestination}
+              />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Source Zone">
+              <ZoneSelect
+                value={form.from_zone_id}
+                warehouseId={form.from_warehouse_id}
+                zones={zones}
+                direction="source"
+                onChange={(value) => onChange({ from_zone_id: value })}
+              />
+            </Field>
+            <Field label="Destination Zone">
+              <ZoneSelect
+                value={form.to_zone_id}
+                warehouseId={form.to_warehouse_id}
+                zones={zones}
+                direction="destination"
+                onChange={(value) => onChange({ to_zone_id: value })}
               />
             </Field>
           </div>
@@ -1506,6 +1828,37 @@ function WarehouseSelect({
   );
 }
 
+function ZoneSelect({
+  value,
+  warehouseId,
+  zones,
+  direction,
+  onChange,
+}: {
+  value: string;
+  warehouseId: string;
+  zones: WarehouseZone[];
+  direction: 'source' | 'destination';
+  onChange: (value: string) => void;
+}) {
+  const availableZones = zones.filter((zone) => zone.warehouse_id === warehouseId);
+  const emptyLabel = direction === 'source'
+    ? 'Automatic allocation across zones'
+    : 'Warehouse level (no zone)';
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={!warehouseId}
+      className="input-base disabled:bg-gray-50 disabled:text-gray-400"
+    >
+      <option value="">{warehouseId ? emptyLabel : 'Select warehouse first'}</option>
+      {availableZones.map((zone) => (
+        <option key={zone.id} value={zone.id}>{zone.name} ({zone.zone_type})</option>
+      ))}
+    </select>
+  );
+}
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
