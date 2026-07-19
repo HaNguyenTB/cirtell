@@ -154,6 +154,13 @@ interface MarketOption {
   region?: string | null;
 }
 
+interface ContactOption {
+  id: string;
+  companyName: string;
+  contactPersonName?: string | null;
+  email?: string | null;
+}
+
 interface WarehouseOption {
   id: string;
   code: string;
@@ -187,6 +194,7 @@ interface AddForm {
   date: string;
   movement_type: MovementType;
   market_id: string;
+  contact_id: string;
   part_id: string;
   part_number: string;
   vendor: string;
@@ -200,9 +208,7 @@ interface AddForm {
   po_number: string;
 }
 
-interface EditForm extends AddForm {
-  contact_id: string;
-}
+type EditForm = AddForm;
 
 interface LineItemDraft {
   localId: string;
@@ -240,6 +246,7 @@ const DEFAULT_ADD_FORM: AddForm = {
   date: new Date().toISOString().slice(0, 10),
   movement_type: 'Purchase',
   market_id: '',
+  contact_id: '',
   part_id: '',
   part_number: '',
   vendor: '',
@@ -471,6 +478,11 @@ async function fetchMarketsApi(): Promise<MarketOption[]> {
   return response.markets || [];
 }
 
+async function fetchContactsApi(): Promise<ContactOption[]> {
+  const response = await apiRequest<{ contacts: ContactOption[] }>('/api/contacts');
+  return response.contacts || [];
+}
+
 async function fetchWarehousesApi(): Promise<WarehouseOption[]> {
   const response = await apiRequest<{ warehouses: WarehouseOption[] }>('/api/transactions/warehouses-list');
   return response.warehouses || [];
@@ -513,6 +525,7 @@ export function TransactionsPage() {
 
   const [parts, setParts] = useState<TransactionPartOption[]>([]);
   const [markets, setMarkets] = useState<MarketOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
 
@@ -539,15 +552,17 @@ export function TransactionsPage() {
   }, []);
 
   const loadReferences = useCallback(async () => {
-    const [partsResult, marketsResult, warehousesResult, projectsResult] = await Promise.allSettled([
+    const [partsResult, marketsResult, contactsResult, warehousesResult, projectsResult] = await Promise.allSettled([
       fetchPartsApi(),
       fetchMarketsApi(),
+      fetchContactsApi(),
       fetchWarehousesApi(),
       fetchProjectsApi(),
     ]);
 
     if (partsResult.status === 'fulfilled') setParts(partsResult.value);
     if (marketsResult.status === 'fulfilled') setMarkets(marketsResult.value);
+    if (contactsResult.status === 'fulfilled') setContacts(contactsResult.value);
     if (warehousesResult.status === 'fulfilled') setWarehouses(warehousesResult.value);
     if (projectsResult.status === 'fulfilled') setProjects(projectsResult.value);
   }, []);
@@ -755,6 +770,7 @@ export function TransactionsPage() {
         <AddTransactionModal
           parts={parts}
           markets={markets}
+          contacts={contacts}
           warehouses={warehouses}
           projects={projects}
           onClose={() => setShowAddModal(false)}
@@ -772,6 +788,7 @@ export function TransactionsPage() {
           transaction={editingTxn}
           parts={parts}
           markets={markets}
+          contacts={contacts}
           warehouses={warehouses}
           projects={projects}
           onClose={() => setEditingTxn(null)}
@@ -1319,6 +1336,7 @@ function PaginationButton({
 interface ModalReferenceProps {
   parts: TransactionPartOption[];
   markets: MarketOption[];
+  contacts: ContactOption[];
   warehouses: WarehouseOption[];
   projects: ProjectOption[];
 }
@@ -1328,7 +1346,7 @@ interface AddTransactionModalProps extends ModalReferenceProps {
   onCreated: () => void;
 }
 
-function AddTransactionModal({ parts, markets, warehouses, projects, onClose, onCreated }: AddTransactionModalProps) {
+function AddTransactionModal({ parts, markets, contacts, warehouses, projects, onClose, onCreated }: AddTransactionModalProps) {
   const [step, setStep] = useState(1);
   const [itemsMode, setItemsMode] = useState<'simple' | 'multi'>('simple');
   const [form, setForm] = useState<AddForm>(DEFAULT_ADD_FORM);
@@ -1454,6 +1472,7 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
         date: form.date,
         movement_type: form.movement_type,
         market_id: form.market_id || undefined,
+        contact_id: form.contact_id || undefined,
         vendor: form.vendor.trim() || undefined,
         source_warehouse_id: form.source_warehouse_id || undefined,
         destination_warehouse_id: form.destination_warehouse_id || undefined,
@@ -1607,6 +1626,7 @@ function AddTransactionModal({ parts, markets, warehouses, projects, onClose, on
               itemCount={items.length}
               itemsMode={itemsMode}
               markets={markets}
+              contacts={contacts}
               parts={parts}
               projects={projects}
               poFile={poFile}
@@ -1676,7 +1696,7 @@ interface EditTransactionModalProps extends ModalReferenceProps {
   onSaved: () => void;
 }
 
-function EditTransactionModal({ transaction, parts, markets, warehouses, projects, onClose, onSaved }: EditTransactionModalProps) {
+function EditTransactionModal({ transaction, parts, markets, contacts, warehouses, projects, onClose, onSaved }: EditTransactionModalProps) {
   const [form, setForm] = useState<EditForm>({
     date: transaction.date || new Date().toISOString().slice(0, 10),
     movement_type: transaction.movementType || 'Purchase',
@@ -1822,6 +1842,17 @@ function EditTransactionModal({ transaction, parts, markets, warehouses, project
           <div>
             <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Project</label>
             <ProjectSelect value={form.project_id} projects={projects} onChange={(value) => updateForm('project_id', value)} />
+          </div>
+          <div>
+            <label htmlFor="edit-transaction-contact" className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Buyer / Contact</label>
+            <select id="edit-transaction-contact" value={form.contact_id} onChange={(event) => updateForm('contact_id', event.target.value)} className="input-base rounded-apple">
+              <option value="">No buyer selected</option>
+              {contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contact.companyName}{contact.contactPersonName ? ` - ${contact.contactPersonName}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="mb-1 block text-micro font-medium text-gray-600 dark:text-gray-400">Market</label>
@@ -2124,6 +2155,7 @@ function LogisticsFields({
   itemCount,
   itemsMode,
   markets,
+  contacts,
   parts,
   warehouses,
   projects,
@@ -2138,6 +2170,7 @@ function LogisticsFields({
   itemCount: number;
   itemsMode: 'simple' | 'multi';
   markets: MarketOption[];
+  contacts: ContactOption[];
   parts: TransactionPartOption[];
   warehouses: WarehouseOption[];
   projects: ProjectOption[];
@@ -2171,6 +2204,17 @@ function LogisticsFields({
         </div>
       </div>
 
+      <div>
+        <label htmlFor="add-transaction-contact" className="mb-1 block text-caption font-medium text-gray-700 dark:text-gray-300">Buyer / Contact</label>
+        <select id="add-transaction-contact" value={form.contact_id} onChange={(event) => update('contact_id', event.target.value)} className="input-base rounded-apple">
+          <option value="">No buyer selected</option>
+          {contacts.map((contact) => (
+            <option key={contact.id} value={contact.id}>
+              {contact.companyName}{contact.contactPersonName ? ` - ${contact.contactPersonName}` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
       <div>
         <h3 className="mb-3 flex items-center gap-2 text-caption font-semibold text-gray-700 dark:text-gray-300">
           <FolderKanban className="h-4 w-4" />

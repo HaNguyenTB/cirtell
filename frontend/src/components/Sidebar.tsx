@@ -11,6 +11,7 @@ import {
   Recycle,
   FolderKanban,
   Shield,
+  ContactRound,
 } from 'lucide-react';
 import { TenantCompanySelector } from './TenantCompanySelector';
 
@@ -18,6 +19,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/parts', label: 'Parts Catalog', icon: Package },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
+  { to: '/contacts', label: 'Contacts', icon: ContactRound },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/warehouse', label: 'Warehouse', icon: Warehouse },
   { to: '/carbon', label: 'Carbon', icon: Leaf },

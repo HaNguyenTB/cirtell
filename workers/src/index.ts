@@ -12,6 +12,7 @@ import { dashboardRoutes } from './routes/dashboard';
 import { warehouseRoutes } from './routes/warehouse';
 import { adminRoutes } from './routes/admin';
 import { projectRoutes } from './routes/projects';
+import { contactRoutes } from './routes/contacts';
 import type { User } from './middleware/auth';
 import { rateLimitMiddleware } from './middleware/rateLimit';
 import { cookieSessionCsrfMiddleware } from './middleware/csrf';
@@ -94,6 +95,7 @@ app.route('/api/transactions', transactionsRoutes);
 app.route('/api/ghg', carbonRoutes);
 app.route('/api/warehouses', warehouseRoutes);
 app.route('/api/projects', projectRoutes);
+app.route('/api/contacts', contactRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api', dashboardRoutes);
 

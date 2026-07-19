@@ -748,6 +748,14 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     return;
   }
 
+  if (path === '/api/contacts' && method === 'GET') {
+    await respond(route, {
+      contacts: [
+        { id: 'contact-buyer', companyName: 'Circular Buyer Ltd', contactPersonName: 'Buyer Contact', email: 'buyer@example.test' },
+      ],
+    });
+    return;
+  }
   if (path === '/api/transactions/warehouses-list') {
     await respond(route, { warehouses: state.warehouses });
     return;

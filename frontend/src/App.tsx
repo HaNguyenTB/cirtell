@@ -9,6 +9,7 @@ import { CarbonPage } from './pages/CarbonPage';
 import { WarehousePage } from './pages/WarehousePage';
 import { AdministrationPage } from './pages/AdministrationPage';
 import { ProjectsPage } from './pages/ProjectsPage';
+import { ContactsPage } from './pages/ContactsPage';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/parts" element={<PartsPage />} />
           <Route path="/transactions" element={<TransactionsPage />} />
+          <Route path="/contacts" element={<ContactsPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:projectId" element={<ProjectsPage />} />
           <Route path="/carbon" element={<CarbonPage />} />

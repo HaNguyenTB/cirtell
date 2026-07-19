@@ -4,6 +4,7 @@ import { createMockState, installMockApi, installMockAuth, type MockState, type 
 interface TransactionCreateRequest {
   movement_type: string;
   market_id: string;
+  contact_id: string;
   quantity: number;
   unit_price_usd: number;
   items: Array<{
@@ -52,6 +53,7 @@ async function createPurchaseWithPo(page: Page, state: MockState) {
   await modal.locator('select').last().selectOption('warehouse-main');
   await modal.getByRole('button', { name: /Next/i }).click();
 
+  await modal.getByLabel('Buyer / Contact').selectOption('contact-buyer');
   await modal.locator('input[type="file"]').setInputFiles('e2e/fixtures/sample-po.pdf');
   await expect(modal.getByText('sample-po.pdf')).toBeVisible();
   await modal.getByRole('button', { name: /Submit Transaction/i }).click();
@@ -194,6 +196,7 @@ test('user can create a transaction and upload a purchase order', async ({ page 
   expect(transactionBody).toMatchObject({
     movement_type: 'Purchase',
     market_id: 'market-qa',
+    contact_id: 'contact-buyer',
     quantity: 3,
     unit_price_usd: 150,
   });
