@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  Ban,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -105,6 +106,8 @@ interface EnrichedTxn {
   destinationWarehouseName?: string | null;
   destinationWarehouseCode?: string | null;
   itemCount?: number | null;
+  inventorySyncStatus?: string | null;
+  voidedAt?: string | null;
 }
 
 interface TransactionItemDetail {
@@ -706,10 +709,10 @@ export function TransactionsPage() {
     try {
       await apiRequest(`/api/transactions/${deleteTxn.id}`, { method: 'DELETE' });
       setDeleteTxn(null);
-      showNotice('success', 'Transaction deleted');
+      showNotice('success', 'Transaction voided');
       refreshTransactions();
     } catch (error) {
-      showNotice('error', getErrorMessage(error, 'Failed to delete transaction'));
+      showNotice('error', getErrorMessage(error, 'Failed to void transaction'));
     } finally {
       setDeleting(false);
     }
@@ -1002,6 +1005,7 @@ function TransactionsTable({
             <tr className="border-b border-gray-200 bg-gray-50 dark:border-white/[0.04] dark:bg-surface-card-alt">
               <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Date</th>
               <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Type</th>
+              <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</th>
               <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Part Details</th>
               <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Serial #</th>
               <th className="px-6 py-4 text-left text-micro font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Condition</th>
@@ -1017,10 +1021,10 @@ function TransactionsTable({
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-white/[0.04] stagger-rows">
             {loading ? (
-              <TableRowsSkeleton rows={8} columns={13} />
+              <TableRowsSkeleton rows={8} columns={14} />
             ) : transactions.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                <td colSpan={14} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                   No transactions found matching your filters.
                 </td>
               </tr>
@@ -1033,6 +1037,9 @@ function TransactionsTable({
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
                       <TransactionMovementBadge type={transaction.movementType} />
+                    </td>
+                    <td className="whitespace-nowrap px-6 py-4">
+                      <TransactionStatusBadge status={transaction.voidedAt ? 'voided' : transaction.inventorySyncStatus} />
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-caption font-medium text-gray-900 dark:text-white">
@@ -1190,9 +1197,9 @@ function TransactionsTable({
                           <button
                             onClick={() => onDelete(transaction)}
                             className="rounded p-1 text-slate transition-colors hover:bg-red-500/15 hover:text-red-500"
-                            title="Delete transaction"
+                            title="Void transaction"
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <Ban className="h-3.5 w-3.5" />
                           </button>
                         )}
                       </div>
@@ -1200,7 +1207,7 @@ function TransactionsTable({
                   </tr>
                   {expandedTxn === transaction.id && (
                     <tr className="animate-dropdown-in bg-signal-teal/5 dark:bg-signal-teal/10">
-                      <td colSpan={13} className="px-6 py-3">
+                      <td colSpan={14} className="px-6 py-3">
                         <ExpandedLineItems items={expandedItems} loading={expandedLoading} />
                       </td>
                     </tr>
@@ -1280,6 +1287,26 @@ function TransactionMovementBadge({ type }: { type: string }) {
   );
 }
 
+function TransactionStatusBadge({ status }: { status?: string | null }) {
+  const normalized = status || 'not_ready';
+  const styles: Record<string, { label: string; className: string }> = {
+    synced: { label: 'Synced', className: 'border-verified-green/20 bg-verified-green/10 text-verified-green' },
+    not_ready: { label: 'Not ready', className: 'border-gray-200 bg-gray-100 text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300' },
+    failed: { label: 'Sync failed', className: 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300' },
+    backfill_pending: { label: 'Backfill pending', className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300' },
+    voided: { label: 'Voided', className: 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300' },
+  };
+  const config = styles[normalized] || {
+    label: normalized.replaceAll('_', ' '),
+    className: 'border-gray-200 bg-gray-100 text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300',
+  };
+
+  return (
+    <span className={`inline-flex rounded-pill border px-2.5 py-1 text-micro font-medium capitalize ${config.className}`}>
+      {config.label}
+    </span>
+  );
+}
 function TableRowsSkeleton({ rows, columns }: { rows: number; columns: number }) {
   return (
     <>
@@ -2599,7 +2626,7 @@ function DeleteTransactionModal({
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!deleting) onCancel(); }} />
       <div className="relative flex w-full max-w-md flex-col rounded-apple-lg bg-white shadow-xl dark:bg-surface-card">
         <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-white/[0.04]">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Delete Transaction?</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Void Transaction?</h2>
           <button
             onClick={() => { if (!deleting) onCancel(); }}
             className="rounded-apple p-1 hover:bg-gray-100 dark:hover:bg-surface-hover"
@@ -2609,7 +2636,7 @@ function DeleteTransactionModal({
           </button>
         </div>
         <div className="space-y-2 px-6 py-5 text-caption text-gray-700 dark:text-gray-300">
-          <p>This will permanently delete this transaction and all of its line items. This action cannot be undone.</p>
+          <p>This transaction will be voided and hidden from default lists. Synced inventory movements will be reversed, while the transaction and its line items remain available for audit.</p>
           <div className="mt-3 space-y-1 rounded-apple bg-gray-50 p-3 text-micro dark:bg-surface-hover">
             <div><span className="text-gray-500">Date:</span> <span className="font-medium">{transaction.date || '-'}</span></div>
             <div><span className="text-gray-500">Type:</span> <span className="font-medium">{transaction.movementType || '-'}</span></div>
@@ -2631,7 +2658,7 @@ function DeleteTransactionModal({
             className="flex items-center gap-2 rounded-apple bg-red-600 px-5 py-2 text-caption font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
           >
             {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {deleting ? 'Deleting...' : 'Delete'}
+            {deleting ? 'Voiding...' : 'Void transaction'}
           </button>
         </div>
       </div>

@@ -45,6 +45,8 @@ interface MockTransaction {
   poNumber: string | null;
   poFileKey?: string | null;
   poFileName?: string | null;
+  inventorySyncStatus?: string | null;
+  voidedAt?: string | null;
   projectId: string | null;
   projectName: string | null;
   destinationWarehouseId: string | null;
@@ -339,6 +341,7 @@ export function createMockState(): MockState {
         destinationWarehouseName: 'Main Warehouse',
         destinationWarehouseCode: 'WH-HN',
         itemCount: 1,
+        inventorySyncStatus: 'synced',
       },
       {
         id: 'transaction-redeploy-1',
@@ -364,6 +367,7 @@ export function createMockState(): MockState {
         destinationWarehouseName: 'Reuse Hub',
         destinationWarehouseCode: 'WH-RU',
         itemCount: 0,
+        inventorySyncStatus: 'synced',
       },
     ],
     ghgEntries: [
@@ -811,6 +815,7 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
       destinationWarehouseName: warehouse?.name || null,
       destinationWarehouseCode: warehouse?.code || null,
       itemCount: Array.isArray(body.items) ? body.items.length : 1,
+      inventorySyncStatus: 'synced',
     };
     state.transactions.unshift(transaction);
     await respond(route, { success: true, id: transaction.id, transaction });

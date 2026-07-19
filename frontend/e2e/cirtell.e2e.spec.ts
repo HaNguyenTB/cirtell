@@ -91,6 +91,9 @@ test('admin can enter dashboard and navigate core modules', async ({ page }) => 
   await page.getByRole('link', { name: /Transactions/i }).click();
   await expect(page).toHaveURL(/\/transactions$/);
   await expect(page.getByRole('heading', { name: 'Transaction History' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Status' })).toBeVisible();
+  await expect(page.getByText('Synced').first()).toBeVisible();
+  await expect(page.getByTitle('Void transaction').first()).toBeVisible();
 
   await page.getByRole('link', { name: /Warehouse/i }).click();
   await expect(page).toHaveURL(/\/warehouse$/);
