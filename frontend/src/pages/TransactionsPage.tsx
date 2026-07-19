@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowDownLeft,
@@ -429,10 +430,12 @@ async function fetchTransactionsApi(
   filters: TransactionFilters,
   pageSize: number,
   currentPage: number,
+  transactionId?: string,
 ): Promise<{ transactions: EnrichedTxn[]; total: number }> {
   const response = await apiRequest<{ transactions: EnrichedTxn[]; total: number }>('/api/transactions', {
     params: {
       search: filters.searchTerm || undefined,
+      transaction_id: transactionId || undefined,
       movement_type: filters.type || undefined,
       start_date: filters.startDate || undefined,
       end_date: filters.endDate || undefined,
@@ -494,6 +497,8 @@ async function fetchAvailableDevicesApi(search?: string): Promise<AvailableDevic
 
 export function TransactionsPage() {
   const { user } = useAuthStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusedTransactionId = searchParams.get('transaction_id')?.trim() || '';
   const canEdit = user?.role === 'Admin' || user?.role === 'User';
   const canDelete = user?.role === 'Admin';
 
@@ -575,7 +580,7 @@ export function TransactionsPage() {
     const loadTransactions = async () => {
       setLoading(true);
       try {
-        const data = await fetchTransactionsApi(filters, pageSize, currentPage);
+        const data = await fetchTransactionsApi(filters, pageSize, currentPage, focusedTransactionId);
         if (!active) return;
         setTransactions(data.transactions);
         setTotalCount(data.total);
@@ -590,7 +595,7 @@ export function TransactionsPage() {
     return () => {
       active = false;
     };
-  }, [filters, currentPage, pageSize, refreshKey, showNotice]);
+  }, [filters, currentPage, pageSize, refreshKey, showNotice, focusedTransactionId]);
 
   const updateFilters = useCallback((nextFilters: TransactionFilters) => {
     setFilters(nextFilters);
@@ -708,10 +713,24 @@ export function TransactionsPage() {
 
       <TransactionSummaryCards summary={summary} />
 
+      {focusedTransactionId && (
+        <div className="flex items-center justify-between gap-3 rounded-apple-md border border-signal-teal/20 bg-signal-teal/5 px-4 py-3">
+          <div>
+            <p className="text-caption font-semibold text-deep-teal">Transaction opened from Project</p>
+            <p className="text-micro text-gray-500">The list is scoped to the selected transaction.</p>
+          </div>
+          <button type="button" onClick={() => setSearchParams({})} className="btn-secondary">
+            <X className="h-4 w-4" />
+            Show all
+          </button>
+        </div>
+      )}
+
       <TransactionFiltersPanel filters={filters} onFiltersChange={updateFilters} />
 
       <TransactionsTable
         transactions={transactions}
+        focusedTransactionId={focusedTransactionId}
         loading={loading}
         expandedTxn={expandedTxn}
         expandedItems={expandedItems}
@@ -884,6 +903,7 @@ function TransactionFiltersPanel({ filters, onFiltersChange }: FiltersPanelProps
 
 interface TransactionsTableProps {
   transactions: EnrichedTxn[];
+  focusedTransactionId: string;
   loading: boolean;
   expandedTxn: string | null;
   expandedItems: TransactionItemDetail[];
@@ -906,6 +926,7 @@ interface TransactionsTableProps {
 
 function TransactionsTable({
   transactions,
+  focusedTransactionId,
   loading,
   expandedTxn,
   expandedItems,
@@ -958,7 +979,7 @@ function TransactionsTable({
             ) : (
               transactions.map((transaction) => (
                 <Fragment key={transaction.id}>
-                  <tr className="transition-colors hover:bg-gray-50 dark:hover:bg-surface-hover">
+                  <tr className={transaction.id === focusedTransactionId ? 'bg-signal-teal/5 transition-colors' : 'transition-colors hover:bg-gray-50 dark:hover:bg-surface-hover'}>
                     <td className="whitespace-nowrap px-6 py-4 text-caption text-gray-600 dark:text-gray-300">
                       {transaction.date}
                     </td>

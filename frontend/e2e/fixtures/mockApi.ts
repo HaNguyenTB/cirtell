@@ -338,6 +338,31 @@ export function createMockState(): MockState {
         destinationWarehouseCode: 'WH-HN',
         itemCount: 1,
       },
+      {
+        id: 'transaction-redeploy-1',
+        date: '2026-06-18',
+        marketId: 'market-vn',
+        marketName: 'Vietnam',
+        region: 'APAC',
+        movementType: 'Redeploy',
+        quantity: 2,
+        unitPrice: 2500,
+        totalValue: 5000,
+        vendor: 'Ericsson',
+        partId: 'part-radio',
+        partNumber: 'RRU-900',
+        partName: 'Remote Radio Unit',
+        technology: '4G',
+        category: 'Radio',
+        condition: 'Good',
+        poNumber: null,
+        projectId: 'project-1',
+        projectName: 'BTS Circularity Pilot',
+        destinationWarehouseId: 'warehouse-reuse',
+        destinationWarehouseName: 'Reuse Hub',
+        destinationWarehouseCode: 'WH-RU',
+        itemCount: 0,
+      },
     ],
     ghgEntries: [
       {
@@ -385,6 +410,145 @@ export function createMockState(): MockState {
   };
 }
 
+function mockProjectBundle(state: MockState) {
+  const project = state.projects[0];
+  return {
+    project: {
+      ...project,
+      description: 'Pilot project for transaction-derived materials and financial reporting',
+      currency: 'USD',
+      timeframe_start: '2026-06-01',
+      timeframe_end: '2026-08-31',
+      updated_at: '2026-06-20T08:00:00Z',
+    },
+    vendors: [],
+    technologies: [],
+    stages: [
+      { id: 'stage-assessment', project_id: project.id, stage: 'assessment', label: 'Assessment', status: 'completed', sort_order: 1 },
+      { id: 'stage-redeployment', project_id: project.id, stage: 'redeployment', label: 'Redeployment', status: 'in_progress', sort_order: 2 },
+    ],
+    tasks: [],
+    equipment: [
+      {
+        id: 'matched-radio-mirror',
+        part_id: 'part-radio',
+        item_name: 'Remote Radio Unit mirror',
+        serial_number: null,
+        vendor: 'Ericsson',
+        category: 'Radio',
+        quantity: 2,
+        condition: 'Good',
+        current_stage: 'redeployment',
+        weight_kg: 18,
+        estimated_reuse_value: 5000,
+        co2_avoided_kg: 6.8,
+      },
+      {
+        id: 'manual-project-kit',
+        part_id: null,
+        item_name: 'Site survey and RF test kit',
+        asset_tag: 'KIT-001',
+        serial_number: 'KIT-SERIAL',
+        vendor: 'TechBridge',
+        category: 'Project tooling',
+        quantity: 1,
+        condition: 'Good',
+        current_stage: 'assessment',
+        weight_kg: 12,
+        estimated_reuse_value: 1500,
+        co2_avoided_kg: 0,
+      },
+    ],
+    financials: [
+      {
+        id: 'matched-redeployment-mirror',
+        type: 'credit',
+        category: 'Redeployment value',
+        description: 'Manual mirror of redeployment value',
+        amount: 5000,
+        currency: 'USD',
+        stage: 'redeployment',
+        incurred_at: '2026-06-18',
+      },
+      {
+        id: 'manual-refurb-cost',
+        type: 'cost',
+        category: 'Refurbishment',
+        description: 'Testing and repair labor',
+        amount: 600,
+        currency: 'USD',
+        stage: 'assessment',
+        incurred_at: '2026-06-15',
+      },
+    ],
+    logistics: [],
+    evidence: [],
+    comments: [],
+    recentActivity: [],
+    transactionProjection: {
+      projectedEquipment: [
+        {
+          id: 'projection:' + project.id + ':part-radio:good:redeployment',
+          projectId: project.id,
+          partId: 'part-radio',
+          partNumber: 'RRU-900',
+          itemName: 'Remote Radio Unit',
+          vendor: 'Ericsson',
+          category: 'Radio',
+          serialNumber: null,
+          condition: 'Good',
+          quantity: 2,
+          currentStage: 'redeployment',
+          weightKg: 18,
+          estimatedReuseValue: 5000,
+          transactionValue: 5000,
+          co2AvoidedKg: 6.8,
+          source: 'transaction',
+          readOnly: true,
+          transactionIds: ['transaction-redeploy-1'],
+          inventorySyncStatuses: ['synced'],
+        },
+      ],
+      projectedFinancials: [
+        {
+          id: 'transaction:transaction-redeploy-1',
+          transactionId: 'transaction-redeploy-1',
+          movementType: 'Redeploy',
+          type: 'credit',
+          category: 'Redeployment value',
+          description: 'Redeployment transaction value',
+          amount: 5000,
+          currency: 'USD',
+          stage: 'redeployment',
+          incurredAt: '2026-06-18',
+          source: 'transaction',
+          readOnly: true,
+        },
+      ],
+      matchedEquipmentProjectionIds: ['projection:project-1:part-radio:good:redeployment'],
+      matchedFinancialTransactionIds: ['transaction-redeploy-1'],
+      transactionSummary: {
+        transactionCount: 1,
+        lineCount: 1,
+        totalTransactionValue: 5000,
+        purchaseCost: 0,
+        salesRevenue: 0,
+        redeploymentCredit: 5000,
+        recyclingRevenue: 0,
+        projectedCo2AvoidedKg: 6.8,
+      },
+      reconciliationWarnings: [],
+    },
+    kpis: {
+      equipment_count: 2,
+      co2_avoided_kg: 6.8,
+      reuse_value: 5000,
+      revenue_credits: 5000,
+      costs: 600,
+      net_financial: 4400,
+    },
+  };
+}
 export async function installMockAuth(page: Page, options: MockUserOptions = {}) {
   const role = options.role ?? 'Admin';
   const isSuperAdmin = options.isSuperAdmin ?? role === 'Admin';
@@ -562,7 +726,11 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
   }
 
   if (path === '/api/transactions' && method === 'GET') {
-    await respond(route, { transactions: state.transactions, total: state.transactions.length });
+    const transactionId = url.searchParams.get('transaction_id');
+    const transactions = transactionId
+      ? state.transactions.filter((transaction) => transaction.id === transactionId)
+      : state.transactions;
+    await respond(route, { transactions, total: transactions.length });
     return;
   }
 
@@ -726,6 +894,15 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     return;
   }
 
+  if (path === '/api/projects/project-1' && method === 'GET') {
+    await respond(route, mockProjectBundle(state));
+    return;
+  }
+
+  if (path === '/api/projects/project-1/members' && method === 'GET') {
+    await respond(route, { members: [] });
+    return;
+  }
   if (path === '/api/projects/lookups/vendors') {
     await respond(route, { vendors: [{ id: 'vendor-1', name: 'Nokia', category: 'OEM', region: 'APAC' }] });
     return;

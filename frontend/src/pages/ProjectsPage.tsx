@@ -130,6 +130,10 @@ interface ProjectEquipment {
   estimated_reuse_value?: number | null;
   co2_avoided_kg?: number | null;
   notes?: string | null;
+  source?: 'manual' | 'transaction' | 'matched';
+  read_only?: boolean;
+  transaction_ids?: string[];
+  inventory_sync_statuses?: string[];
 }
 
 interface PartOption {
@@ -156,6 +160,71 @@ interface ProjectFinancial {
   stage?: string | null;
   incurred_at?: string | null;
   created_at?: string | null;
+  source?: 'manual' | 'transaction' | 'matched';
+  read_only?: boolean;
+  transaction_id?: string;
+  movement_type?: string;
+}
+
+interface ProjectedEquipment {
+  id: string;
+  projectId: string;
+  partId: string;
+  partNumber?: string | null;
+  itemName: string;
+  vendor?: string | null;
+  category?: string | null;
+  serialNumber?: string | null;
+  condition: string;
+  quantity: number;
+  currentStage: string;
+  weightKg?: number | null;
+  estimatedReuseValue: number;
+  transactionValue: number;
+  co2AvoidedKg?: number | null;
+  source: 'transaction';
+  readOnly: true;
+  transactionIds: string[];
+  inventorySyncStatuses: string[];
+}
+
+interface ProjectedFinancial {
+  id: string;
+  transactionId: string;
+  movementType: string;
+  type: 'cost' | 'revenue' | 'credit';
+  category: string;
+  description: string;
+  amount: number;
+  currency: string;
+  stage: string;
+  incurredAt: string;
+  source: 'transaction';
+  readOnly: true;
+}
+
+interface ProjectTransactionProjection {
+  projectedEquipment: ProjectedEquipment[];
+  projectedFinancials: ProjectedFinancial[];
+  transactionSummary: {
+    transactionCount: number;
+    lineCount: number;
+    totalTransactionValue: number;
+    purchaseCost: number;
+    salesRevenue: number;
+    redeploymentCredit: number;
+    recyclingRevenue: number;
+    projectedCo2AvoidedKg: number;
+  };
+  matchedEquipmentProjectionIds?: string[];
+  matchedFinancialTransactionIds?: string[];
+  reconciliationWarnings: Array<{
+    code: string;
+    message: string;
+    transactionId: string;
+    transactionItemId?: string | null;
+    partId?: string | null;
+  }>;
 }
 
 interface ProjectLogistics {
@@ -216,6 +285,8 @@ interface ProjectKpis {
   equipment_count: number;
   co2_avoided_kg: number;
   reuse_value: number;
+  revenue_credits?: number;
+  costs?: number;
   net_financial: number;
 }
 
@@ -231,6 +302,7 @@ interface ProjectBundle {
   evidence: ProjectEvidence[];
   comments: ProjectComment[];
   recentActivity: ProjectActivity[];
+  transactionProjection?: ProjectTransactionProjection;
   kpis: ProjectKpis;
 }
 
@@ -507,6 +579,123 @@ function formatNumber(value?: number | null) {
   return Number(value || 0).toLocaleString();
 }
 
+function normalizeMaterialToken(value?: string | null) {
+  return (value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function projectedEquipmentRow(item: ProjectedEquipment): ProjectEquipment {
+  return {
+    id: item.id,
+    part_id: item.partId,
+    part_number: item.partNumber,
+    item_name: item.itemName,
+    serial_number: item.serialNumber,
+    vendor: item.vendor,
+    category: item.category,
+    quantity: item.quantity,
+    condition: item.condition,
+    current_stage: item.currentStage,
+    weight_kg: item.weightKg,
+    estimated_reuse_value: item.estimatedReuseValue,
+    co2_avoided_kg: item.co2AvoidedKg,
+    source: 'transaction',
+    read_only: true,
+    transaction_ids: item.transactionIds,
+    inventory_sync_statuses: item.inventorySyncStatuses,
+  };
+}
+
+function isTransactionMirror(manual: ProjectEquipment, projected: ProjectEquipment) {
+  if (!manual.part_id || manual.part_id !== projected.part_id) return false;
+  if (Number(manual.quantity) !== Number(projected.quantity)) return false;
+  if (normalizeMaterialToken(manual.condition) !== normalizeMaterialToken(projected.condition)) return false;
+  if (normalizeMaterialToken(manual.current_stage) !== normalizeMaterialToken(projected.current_stage)) return false;
+
+  const manualSerial = normalizeMaterialToken(manual.serial_number);
+  const projectedSerial = normalizeMaterialToken(projected.serial_number);
+  return !manualSerial || !projectedSerial || manualSerial === projectedSerial;
+}
+
+function projectMaterialRows(bundle: ProjectBundle): ProjectEquipment[] {
+  const matchedIds = new Set(bundle.transactionProjection?.matchedEquipmentProjectionIds || []);
+  const projected = (bundle.transactionProjection?.projectedEquipment || []).map((item) => {
+    const row = projectedEquipmentRow(item);
+    return { ...row, source: matchedIds.has(item.id) ? 'matched' as const : 'transaction' as const };
+  });
+  const matchedProjected = projected.filter((item) => item.source === 'matched');
+  const manual = bundle.equipment
+    .filter((item) => !matchedProjected.some((candidate) => isTransactionMirror(item, candidate)))
+    .map((item) => ({ ...item, source: 'manual' as const, read_only: false }));
+  return [...projected, ...manual];
+}
+
+function projectMaterialKpis(bundle: ProjectBundle) {
+  return {
+    equipmentCount: Number(bundle.kpis.equipment_count || 0),
+    co2AvoidedKg: Number(bundle.kpis.co2_avoided_kg || 0),
+    reuseValue: Number(bundle.kpis.reuse_value || 0),
+  };
+}
+
+function projectedFinancialRow(item: ProjectedFinancial): ProjectFinancial {
+  return {
+    id: item.id,
+    type: item.type,
+    category: item.category,
+    description: item.description,
+    amount: item.amount,
+    currency: item.currency,
+    stage: item.stage,
+    incurred_at: item.incurredAt,
+    source: 'transaction',
+    read_only: true,
+    transaction_id: item.transactionId,
+    movement_type: item.movementType,
+  };
+}
+
+function isTransactionFinancialMirror(manual: ProjectFinancial, projected: ProjectFinancial) {
+  return manual.type === projected.type
+    && Number(manual.amount) === Number(projected.amount)
+    && normalizeMaterialToken(manual.currency) === normalizeMaterialToken(projected.currency)
+    && normalizeMaterialToken(manual.category) === normalizeMaterialToken(projected.category)
+    && normalizeMaterialToken(manual.stage) === normalizeMaterialToken(projected.stage)
+    && (manual.incurred_at || '').slice(0, 10) === (projected.incurred_at || '').slice(0, 10);
+}
+
+function projectFinancialRows(bundle: ProjectBundle): ProjectFinancial[] {
+  const matchedIds = new Set(bundle.transactionProjection?.matchedFinancialTransactionIds || []);
+  const projected = (bundle.transactionProjection?.projectedFinancials || []).map((item) => {
+    const row = projectedFinancialRow(item);
+    return { ...row, source: matchedIds.has(item.transactionId) ? 'matched' as const : 'transaction' as const };
+  });
+  const matchedProjected = projected.filter((item) => item.source === 'matched');
+  const manual = bundle.financials
+    .filter((item) => !matchedProjected.some((candidate) => isTransactionFinancialMirror(item, candidate)))
+    .map((item) => ({ ...item, source: 'manual' as const, read_only: false }));
+  return [...projected, ...manual];
+}
+
+function projectFinancialTotals(bundle: ProjectBundle) {
+  return {
+    rows: projectFinancialRows(bundle),
+    revenue: Number(bundle.kpis.revenue_credits || 0),
+    cost: Number(bundle.kpis.costs || 0),
+    net: Number(bundle.kpis.net_financial || 0),
+  };
+}
+
+function projectionSourceLabel(source?: ProjectEquipment['source']) {
+  if (source === 'matched') return 'Matched';
+  if (source === 'transaction') return 'Transaction';
+  return 'Manual';
+}
+
+function projectionSourceClass(source?: ProjectEquipment['source']) {
+  if (source === 'matched') return 'border-deep-teal/20 bg-deep-teal/10 text-deep-teal';
+  if (source === 'transaction') return 'border-signal-teal/20 bg-signal-teal/10 text-signal-teal';
+  return 'border-gray-200 bg-gray-50 text-gray-600';
+}
 function normalizeSearch(value?: string | null) {
   return (value || '').toLowerCase().trim();
 }
@@ -1493,12 +1682,13 @@ function ProjectOverviewTab({ bundle, onNavigateTab }: { bundle: ProjectBundle; 
   const project = bundle.project;
   const completedStages = bundle.stages.filter((stage) => stage.status === 'completed').length;
   const progress = bundle.stages.length > 0 ? Math.round((completedStages / bundle.stages.length) * 100) : 0;
+  const materialKpis = projectMaterialKpis(bundle);
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard icon={Package} label="Materials" value={formatNumber(bundle.kpis.equipment_count)} detail="Equipment rows" />
-        <StatCard icon={Shield} label="CO2e Avoided" value={`${formatNumber(bundle.kpis.co2_avoided_kg)} kg`} detail="Estimated impact" />
-        <StatCard icon={DollarSign} label="Reuse Value" value={formatCurrency(bundle.kpis.reuse_value, project.currency || 'USD')} detail="Recovered value" />
+        <StatCard icon={Package} label="Materials" value={formatNumber(materialKpis.equipmentCount)} detail="Equipment rows" />
+        <StatCard icon={Shield} label="CO2e Avoided" value={`${formatNumber(materialKpis.co2AvoidedKg)} kg`} detail="Estimated impact" />
+        <StatCard icon={DollarSign} label="Reuse Value" value={formatCurrency(materialKpis.reuseValue, project.currency || 'USD')} detail="Recovered value" />
         <StatCard icon={GitBranch} label="Workflow" value={`${progress}%`} detail={`${completedStages} of ${bundle.stages.length} stages`} />
       </div>
 
@@ -1729,7 +1919,43 @@ function WorkflowTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle; 
   );
 }
 
+function TransactionLinkButton({ transactionId }: { transactionId: string }) {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      title="Open source transaction"
+      onClick={() => navigate('/transactions?transaction_id=' + encodeURIComponent(transactionId))}
+      className="rounded p-1.5 text-signal-teal hover:bg-signal-teal/10 hover:text-deep-teal"
+    >
+      <Eye className="h-4 w-4" />
+    </button>
+  );
+}
+
+function ProjectionWarnings({ warnings }: { warnings: ProjectTransactionProjection['reconciliationWarnings'] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="rounded-apple-lg border border-signal-teal/20 bg-signal-teal/5 p-4 text-caption text-deep-teal">
+      <div className="mb-2 flex items-center gap-2 font-semibold">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        {warnings.length} transaction line{warnings.length === 1 ? '' : 's'} need review
+      </div>
+      <div className="space-y-2">
+        {warnings.map((warning, index) => (
+          <div key={warning.code + '-' + warning.transactionId + '-' + (warning.transactionItemId || index)} className="flex items-center justify-between gap-3">
+            <span>{warning.message}</span>
+            <TransactionLinkButton transactionId={warning.transactionId} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function EquipmentTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle; canManage: boolean; onRefresh: () => void }) {
+  const equipmentRows = useMemo(() => projectMaterialRows(bundle), [bundle]);
+  const projectionWarnings = bundle.transactionProjection?.reconciliationWarnings || [];
+
   const importInputRef = useRef<HTMLInputElement>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<EquipmentForm>(equipmentDefaults);
@@ -1913,6 +2139,7 @@ function EquipmentTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle;
         ) : null}
       />
       {importError && <ErrorBanner message={importError} />}
+      <ProjectionWarnings warnings={projectionWarnings} />
       {(importSummary || importIssues.length > 0) && (
         <div className="rounded-apple-lg border border-signal-teal/20 bg-signal-teal/5 p-4">
           {importSummary && (
@@ -1935,9 +2162,9 @@ function EquipmentTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle;
       <DataTable
         emptyIcon={Package}
         emptyText="No equipment entries yet"
-        headers={['Item', 'Vendor', 'Qty', 'Condition', 'Stage', 'CO2e Avoided', 'Value', '']}
+        headers={['Item', 'Vendor', 'Qty', 'Condition', 'Stage', 'CO2e Avoided', 'Value', 'Source', '']}
       >
-        {bundle.equipment.map((item) => (
+        {equipmentRows.map((item) => (
           <tr key={item.id} className="hover:bg-gray-50">
             <td className="px-4 py-3">
               <p className="font-medium text-gray-900">{item.item_name}</p>
@@ -1949,14 +2176,25 @@ function EquipmentTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle;
             <td className="px-4 py-3 font-semibold">{item.quantity}</td>
             <td className="px-4 py-3"><Badge className="border-signal-teal/20 bg-signal-teal/10 text-signal-teal">{item.condition}</Badge></td>
             <td className="px-4 py-3 text-gray-600">{item.current_stage.replaceAll('_', ' ')}</td>
-            <td className="px-4 py-3 text-gray-600">{formatNumber(item.co2_avoided_kg)} kg</td>
+            <td className="px-4 py-3 text-gray-600">{item.co2_avoided_kg == null ? '-' : formatNumber(item.co2_avoided_kg) + ' kg'}</td>
             <td className="px-4 py-3 font-medium">{formatCurrency(item.estimated_reuse_value, bundle.project.currency || 'USD')}</td>
+            <td className="px-4 py-3">
+              <div className="flex flex-col items-start gap-1">
+                <Badge className={projectionSourceClass(item.source)}>{projectionSourceLabel(item.source)}</Badge>
+                {item.inventory_sync_statuses?.some((status) => status === 'not_ready') && (
+                  <span className="text-[10px] font-medium text-gray-500">Inventory not ready</span>
+                )}
+              </div>
+            </td>
             <td className="px-4 py-3 text-right">
-              {canManage && (
-                <button type="button" onClick={() => void remove(item.id)} className="rounded p-1.5 text-gray-400 hover:bg-gray-50 hover:text-gray-600">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
+              <div className="flex justify-end gap-1">
+                {item.transaction_ids?.[0] && <TransactionLinkButton transactionId={item.transaction_ids[0]} />}
+                {canManage && !item.read_only && (
+                  <button type="button" title="Delete project equipment" onClick={() => void remove(item.id)} className="rounded p-1.5 text-gray-400 hover:bg-gray-50 hover:text-gray-600">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </td>
           </tr>
         ))}
@@ -2053,8 +2291,7 @@ function FinancialsTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<FinancialForm>(financialDefaults);
   const [saving, setSaving] = useState(false);
-  const revenue = bundle.financials.filter((item) => item.type !== 'cost').reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const cost = bundle.financials.filter((item) => item.type === 'cost').reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const { rows: financialRows, revenue, cost, net } = useMemo(() => projectFinancialTotals(bundle), [bundle]);
   const currency = bundle.project.currency || 'USD';
 
   const save = async (event: FormEvent) => {
@@ -2079,13 +2316,14 @@ function FinancialsTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle
   return (
     <div className="space-y-4">
       <SectionHeader title="Financials" subtitle="Costs, revenue, credits, and net project value" action={canManage ? <button type="button" onClick={() => setFormOpen(true)} className="btn-primary"><Plus className="h-4 w-4" />Add Entry</button> : null} />
+      <ProjectionWarnings warnings={bundle.transactionProjection?.reconciliationWarnings || []} />
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard icon={DollarSign} label="Revenue / Credits" value={formatCurrency(revenue, currency)} detail="Positive value" />
         <StatCard icon={DollarSign} label="Costs" value={formatCurrency(cost, currency)} detail="Project spend" />
-        <StatCard icon={DollarSign} label="Net" value={formatCurrency(revenue - cost, currency)} detail="Revenue less cost" />
+        <StatCard icon={DollarSign} label="Net" value={formatCurrency(net, currency)} detail="Revenue less cost" />
       </div>
-      <DataTable emptyIcon={DollarSign} emptyText="No financial entries yet" headers={['Type', 'Category', 'Description', 'Stage', 'Date', 'Amount', '']}>
-        {bundle.financials.map((item) => (
+      <DataTable emptyIcon={DollarSign} emptyText="No financial entries yet" headers={['Type', 'Category', 'Description', 'Stage', 'Date', 'Amount', 'Source', '']}>
+        {financialRows.map((item) => (
           <tr key={item.id} className="hover:bg-gray-50">
             <td className="px-4 py-3"><Badge className="border-signal-teal/20 bg-signal-teal/10 text-signal-teal">{item.type}</Badge></td>
             <td className="px-4 py-3 font-medium text-gray-900">{item.category}</td>
@@ -2093,7 +2331,15 @@ function FinancialsTab({ bundle, canManage, onRefresh }: { bundle: ProjectBundle
             <td className="px-4 py-3 text-gray-500">{item.stage || '-'}</td>
             <td className="px-4 py-3 text-gray-500">{formatDate(item.incurred_at || item.created_at)}</td>
             <td className="px-4 py-3 font-semibold">{formatCurrency(item.amount, item.currency || currency)}</td>
-            <td className="px-4 py-3 text-right">{canManage && <DeleteButton onClick={() => void remove(item.id)} />}</td>
+            <td className="px-4 py-3">
+              <Badge className={projectionSourceClass(item.source)}>{projectionSourceLabel(item.source)}</Badge>
+            </td>
+            <td className="px-4 py-3 text-right">
+              <div className="flex justify-end gap-1">
+                {item.transaction_id && <TransactionLinkButton transactionId={item.transaction_id} />}
+                {canManage && !item.read_only && <DeleteButton onClick={() => void remove(item.id)} />}
+              </div>
+            </td>
           </tr>
         ))}
       </DataTable>
@@ -2343,13 +2589,15 @@ function CommentsTab({ bundle, onRefresh }: { bundle: ProjectBundle; onRefresh: 
 
 function ReportsTab({ bundle }: { bundle: ProjectBundle }) {
   const project = bundle.project;
+  const materialKpis = projectMaterialKpis(bundle);
+  const financialTotals = projectFinancialTotals(bundle);
   const rows = [
     ['Project', project.name],
     ['Status', statusConfig(project.status).label],
-    ['Materials', formatNumber(bundle.kpis.equipment_count)],
-    ['CO2e Avoided', `${formatNumber(bundle.kpis.co2_avoided_kg)} kg`],
-    ['Reuse Value', formatCurrency(bundle.kpis.reuse_value, project.currency || 'USD')],
-    ['Net Financial', formatCurrency(bundle.kpis.net_financial, project.currency || 'USD')],
+    ['Materials', formatNumber(materialKpis.equipmentCount)],
+    ['CO2e Avoided', `${formatNumber(materialKpis.co2AvoidedKg)} kg`],
+    ['Reuse Value', formatCurrency(materialKpis.reuseValue, project.currency || 'USD')],
+    ['Net Financial', formatCurrency(financialTotals.net, project.currency || 'USD')],
   ];
 
   const exportReport = () => {

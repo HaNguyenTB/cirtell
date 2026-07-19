@@ -62,6 +62,17 @@ async function createPurchaseWithPo(page: Page, state: MockState) {
 
 test('admin can enter dashboard and navigate core modules', async ({ page }) => {
   const { pageErrors } = await setupApp(page, { role: 'Admin', isSuperAdmin: true });
+  const projectChildDeletes: string[] = [];
+  const projectDetailLoads: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'DELETE' && /^\/api\/projects\/project-1\/(equipment|financials)\//.test(path)) {
+      projectChildDeletes.push(path);
+    }
+    if (request.method() === 'GET' && path === '/api/projects/project-1') {
+      projectDetailLoads.push(path);
+    }
+  });
 
   await page.goto('/');
 
@@ -90,6 +101,46 @@ test('admin can enter dashboard and navigate core modules', async ({ page }) => 
   await page.getByRole('link', { name: /Projects/i }).click();
   await expect(page).toHaveURL(/\/projects$/);
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+
+  await page.getByRole('button', { name: /BTS Circularity Pilot/i }).click();
+  await expect(page).toHaveURL(/\/projects\/project-1$/);
+  await expect(page.getByRole('heading', { name: 'BTS Circularity Pilot' })).toBeVisible();
+
+  const materialsKpi = page.getByText('Materials', { exact: true }).locator('..');
+  await expect(materialsKpi).toContainText('2');
+  await expect(page.getByText('6.8 kg', { exact: true })).toBeVisible();
+  await expect(page.getByText('$5,000', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Materials & Assets' }).click();
+  const projectedMaterialRow = page.getByRole('row').filter({ hasText: 'Remote Radio Unit' });
+  const manualMaterialRow = page.getByRole('row').filter({ hasText: 'Site survey and RF test kit' });
+  await expect(projectedMaterialRow).toContainText('Matched');
+  await expect(projectedMaterialRow.getByTitle('Delete project equipment')).toHaveCount(0);
+  await expect(projectedMaterialRow.getByTitle('Open source transaction')).toHaveCount(1);
+  await expect(manualMaterialRow).toContainText('Manual');
+  await expect(manualMaterialRow.getByTitle('Delete project equipment')).toHaveCount(1);
+
+  await projectedMaterialRow.getByTitle('Open source transaction').click();
+  await expect(page).toHaveURL(/\/transactions\?transaction_id=transaction-redeploy-1$/);
+  await expect(page.getByText('Transaction opened from Project')).toBeVisible();
+  await expect(page.getByText('Remote Radio Unit', { exact: true })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/projects\/project-1$/);
+  await expect(page.getByRole('heading', { name: 'BTS Circularity Pilot' })).toBeVisible();
+  await expect.poll(() => projectDetailLoads.length).toBeGreaterThanOrEqual(2);
+
+  await page.getByRole('button', { name: 'Financials' }).click();
+  await expect(page.getByText('$4,400', { exact: true })).toBeVisible();
+  const projectedFinancialRow = page.getByRole('row').filter({ hasText: 'Redeployment value' });
+  const manualFinancialRow = page.getByRole('row').filter({ hasText: 'Refurbishment' });
+  await expect(projectedFinancialRow).toContainText('Matched');
+  await expect(projectedFinancialRow.getByTitle('Open source transaction')).toHaveCount(1);
+  await expect(projectedFinancialRow.getByRole('button')).toHaveCount(1);
+  await expect(manualFinancialRow).toContainText('Manual');
+  await expect(manualFinancialRow.getByTitle('Open source transaction')).toHaveCount(0);
+  await expect(manualFinancialRow.getByRole('button')).toHaveCount(1);
+  expect(projectChildDeletes).toEqual([]);
 
   await expectNoPageErrors(pageErrors);
 });
