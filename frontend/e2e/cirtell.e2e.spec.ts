@@ -251,9 +251,35 @@ test('inventory and carbon workflows respect viewer permissions', async ({ brows
   const userContext = await browser.newContext();
   const userPage = await userContext.newPage();
   const userSetup = await setupApp(userPage, { role: 'User', isSuperAdmin: false });
+  userSetup.state.movements.push(...Array.from({ length: 10 }, (_, index) => ({
+    id: `manual-movement-${index + 1}`,
+    movement_type: 'Receive',
+    from_warehouse_id: null,
+    to_warehouse_id: 'warehouse-main',
+    part_number: 'ANT-001',
+    model_name: '5G Panel Antenna',
+    quantity: index + 1,
+    condition: 'NIB',
+    from_warehouse_name: null,
+    from_zone_name: null,
+    to_warehouse_name: 'Main Warehouse',
+    to_zone_name: 'Receiving',
+    reference: null,
+    notes: null,
+    created_by_name: 'User Actor',
+    created_at: `2026-06-${String(13 + index).padStart(2, '0')}T08:00:00Z`,
+    transaction_id: null,
+    transaction_date: null,
+    transaction_movement_type: null,
+    transaction_po_number: null,
+  })));
 
   await userPage.goto('/warehouse');
+  await expect(userPage.getByRole('table', { name: 'Recent Movements' }).getByRole('row')).toHaveCount(9);
   await userPage.getByText('Main Warehouse').first().click();
+  await expect(userPage.getByRole('heading', { name: 'Warehouse Movement History' })).toBeVisible();
+  await expect(userPage.getByRole('table', { name: 'Warehouse Movement History' }).getByRole('row')).toHaveCount(12);
+  await expect(userPage.getByRole('table', { name: 'Warehouse Movement History' }).getByRole('link', { name: /Purchase/ })).toBeVisible();
   await expect(userPage.getByRole('heading', { name: 'Warehouse Zones' })).toBeVisible();
   await expect(userPage.getByText('Receiving', { exact: true })).toBeVisible();
   await userPage.getByRole('button', { name: 'Add Zone', exact: true }).first().click();

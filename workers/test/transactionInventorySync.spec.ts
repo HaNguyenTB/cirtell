@@ -1116,4 +1116,48 @@ describe('warehouse zone route integration', () => {
     );
     expect(movement).toEqual({ from_zone_id: 'zone_a', to_zone_id: 'zone_b' });
   });
+
+  it('lists complete warehouse-scoped movement history with transaction metadata', async () => {
+    const transactionId = await createTransaction({
+      date: '2026-07-18',
+      movement_type: 'Purchase',
+      part_id: 'part_router',
+      quantity: 3,
+      condition: 'Good',
+      destination_warehouse_id: 'wh_source',
+    });
+    const manual = await createWarehouseMovement({
+      movement_type: 'Receive',
+      part_id: 'part_router',
+      quantity: 2,
+      condition: 'Good',
+      to_warehouse_id: 'wh_dest',
+    });
+    expect(manual.response.status).toBe(201);
+
+    const sourceHistory = await api('GET', '/api/warehouses/movements/list?warehouse_id=wh_source');
+    expect(sourceHistory.response.status).toBe(200);
+    expect(sourceHistory.json.movements).toEqual([
+      expect.objectContaining({
+        transaction_id: transactionId,
+        transaction_date: '2026-07-18',
+        transaction_movement_type: 'Purchase',
+      }),
+    ]);
+
+    const destinationHistory = await api('GET', '/api/warehouses/movements/list?warehouse_id=wh_dest');
+    expect(destinationHistory.response.status).toBe(200);
+    expect(destinationHistory.json.movements).toEqual([
+      expect.objectContaining({
+        id: manual.json.id,
+        transaction_id: null,
+        transaction_date: null,
+        transaction_movement_type: null,
+      }),
+    ]);
+
+    const recent = await api('GET', '/api/warehouses/movements/list?limit=1');
+    expect(recent.response.status).toBe(200);
+    expect(recent.json.movements).toHaveLength(1);
+  });
 });

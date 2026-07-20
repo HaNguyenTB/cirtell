@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -75,6 +76,10 @@ interface Movement {
   created_at: string;
   reference: string | null;
   notes: string | null;
+  transaction_id: string | null;
+  transaction_date: string | null;
+  transaction_movement_type: string | null;
+  transaction_po_number: string | null;
 }
 
 interface PartOption {
@@ -217,14 +222,6 @@ function getWarehouseInventory(warehouse: WarehouseItem | null, inventory: Inven
   return inventory.filter((item) => normalize(item.warehouse_code) === code || normalize(item.warehouse_name) === name);
 }
 
-function getWarehouseMovements(warehouse: WarehouseItem | null, movements: Movement[]) {
-  if (!warehouse) return [];
-  const name = normalize(warehouse.name);
-  return movements.filter(
-    (movement) => normalize(movement.from_warehouse_name) === name || normalize(movement.to_warehouse_name) === name,
-  );
-}
-
 function buildPartGroups(items: InventoryItem[]) {
   const groups = new Map<string, PartStockGroup>();
 
@@ -289,6 +286,8 @@ export function WarehousePage() {
   const [zones, setZones] = useState<WarehouseZone[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
+  const [warehouseMovementHistory, setWarehouseMovementHistory] = useState<Movement[]>([]);
+  const [warehouseMovementsLoading, setWarehouseMovementsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -325,7 +324,7 @@ export function WarehousePage() {
         apiRequest<{ success: boolean; warehouses: WarehouseItem[] }>('/api/warehouses'),
         apiRequest<{ success: boolean; zones: WarehouseZone[] }>('/api/warehouses/zones/all'),
         apiRequest<{ success: boolean; inventory: InventoryItem[] }>('/api/warehouses/inventory/all'),
-        apiRequest<{ success: boolean; movements: Movement[] }>('/api/warehouses/movements/list'),
+        apiRequest<{ success: boolean; movements: Movement[] }>('/api/warehouses/movements/list', { params: { limit: 8 } }),
       ]);
 
       if (warehousesResult.status === 'fulfilled') {
@@ -360,6 +359,35 @@ export function WarehousePage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const selectedWarehouseId = selectedWarehouse?.id || null;
+
+  useEffect(() => {
+    if (!selectedWarehouseId) {
+      setWarehouseMovementHistory([]);
+      setWarehouseMovementsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setWarehouseMovementsLoading(true);
+    apiRequest<{ success: boolean; movements: Movement[] }>('/api/warehouses/movements/list', {
+      params: { warehouse_id: selectedWarehouseId },
+    })
+      .then((response) => {
+        if (!cancelled) setWarehouseMovementHistory(response.movements || []);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(getErrorMessage(err, 'Failed to load warehouse movement history'));
+      })
+      .finally(() => {
+        if (!cancelled) setWarehouseMovementsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [movements, selectedWarehouseId]);
 
   useEffect(() => {
     if (!showMoveForm) return;
@@ -405,10 +433,6 @@ export function WarehousePage() {
     [inventory, selectedWarehouse],
   );
 
-  const selectedMovements = useMemo(
-    () => getWarehouseMovements(selectedWarehouse, movements),
-    [movements, selectedWarehouse],
-  );
 
   const selectedConditionCounts = useMemo(() => computeConditionCounts(selectedInventory), [selectedInventory]);
 
@@ -691,7 +715,12 @@ export function WarehousePage() {
           )}
         </div>
 
-        <RecentMovements movements={selectedMovements.slice(0, 8)} title="Recent Warehouse Movements" />
+        <RecentMovements
+          movements={warehouseMovementHistory}
+          title="Warehouse Movement History"
+          description="All recorded inventory activity for this warehouse"
+          loading={warehouseMovementsLoading}
+        />
 
         {showWhForm && (
           <WarehouseFormModal
@@ -826,7 +855,11 @@ export function WarehousePage() {
         </div>
       )}
 
-      <RecentMovements movements={movements.slice(0, 8)} title="Recent Movements" />
+      <RecentMovements
+        movements={movements}
+        title="Recent Movements"
+        description="Latest inventory activity across warehouse locations"
+      />
 
       {showWhForm && (
         <WarehouseFormModal
@@ -1313,24 +1346,42 @@ function PartStockRow({ group, isExpanded, onToggle }: { group: PartStockGroup; 
   );
 }
 
-function RecentMovements({ movements, title }: { movements: Movement[]; title: string }) {
+function RecentMovements({
+  movements,
+  title,
+  description,
+  loading = false,
+}: {
+  movements: Movement[];
+  title: string;
+  description: string;
+  loading?: boolean;
+}) {
   return (
     <div className="bg-white rounded-apple-lg shadow-none border border-gray-100 overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h2 className="text-sub-heading font-semibold text-gray-900">{title}</h2>
-          <p className="text-caption text-gray-500 mt-0.5">Latest inventory activity across warehouse locations</p>
+          <p className="text-caption text-gray-500 mt-0.5">{description}</p>
         </div>
       </div>
 
-      {movements.length === 0 ? (
+      {loading ? (
+        <div className="space-y-px bg-gray-50">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="grid grid-cols-8 gap-4 bg-white px-4 py-4">
+              {Array.from({ length: 8 }).map((__, cell) => <div key={cell} className="skeleton h-4 rounded" />)}
+            </div>
+          ))}
+        </div>
+      ) : movements.length === 0 ? (
         <div className="text-center py-10">
           <ArrowRightLeft className="h-10 w-10 text-gray-300 mx-auto mb-3" />
           <p className="text-caption text-gray-500">No movements recorded</p>
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" aria-label={title}>
             <thead className="table-head">
               <tr>
                 <th className="px-4 py-3 text-left">Date</th>
@@ -1339,6 +1390,7 @@ function RecentMovements({ movements, title }: { movements: Movement[]; title: s
                 <th className="px-4 py-3 text-right">Qty</th>
                 <th className="px-4 py-3 text-left">From</th>
                 <th className="px-4 py-3 text-left">To</th>
+                <th className="px-4 py-3 text-left">Transaction</th>
                 <th className="px-4 py-3 text-left">By</th>
               </tr>
             </thead>
@@ -1347,7 +1399,7 @@ function RecentMovements({ movements, title }: { movements: Movement[]; title: s
                 <tr key={movement.id} className="hover:bg-gray-50/70 transition-colors">
                   <td className="px-4 py-3.5 text-gray-500 text-xs tabular-nums">{formatDate(movement.created_at)}</td>
                   <td className="px-4 py-3.5">
-                    <span className={`badge border ${movementStyles[movement.movement_type] || movementStyles.Adjust}`}>
+                    <span className={'badge border ' + (movementStyles[movement.movement_type] || movementStyles.Adjust)}>
                       {movement.movement_type}
                     </span>
                   </td>
@@ -1358,6 +1410,20 @@ function RecentMovements({ movements, title }: { movements: Movement[]; title: s
                   <td className="px-4 py-3.5 text-right font-semibold tabular-nums">{formatNumber(movement.quantity)}</td>
                   <td className="px-4 py-3.5 text-gray-500">{formatMovementLocation(movement.from_warehouse_name, movement.from_zone_name)}</td>
                   <td className="px-4 py-3.5 text-gray-500">{formatMovementLocation(movement.to_warehouse_name, movement.to_zone_name)}</td>
+                  <td className="px-4 py-3.5">
+                    {movement.transaction_id ? (
+                      <Link
+                        to={'/transactions?transaction_id=' + encodeURIComponent(movement.transaction_id)}
+                        className="inline-flex flex-col text-signal-teal hover:text-deep-teal"
+                        title={'Open transaction ' + movement.transaction_id}
+                      >
+                        <span className="text-xs font-semibold">{movement.transaction_movement_type || 'Transaction'}</span>
+                        {movement.transaction_date && <span className="text-micro text-gray-400">{formatDate(movement.transaction_date)}</span>}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3.5 text-gray-400 text-xs">{movement.created_by_name || '-'}</td>
                 </tr>
               ))}

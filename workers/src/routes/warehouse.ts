@@ -537,19 +537,40 @@ warehouseRoutes.post('/inventory/move', requirePermission(Permission.EDIT_WAREHO
   }
 });
 
-// GET /api/warehouses/movements - recent movements
+// GET /api/warehouses/movements - scoped movement history
 warehouseRoutes.get('/movements/list', requirePermission(Permission.VIEW_WAREHOUSE), async (c) => {
   try {
     const scope = await resolveTenantScope(c);
     const scopeWhere = scopedWhere(scope, 'm.tenant_id', 'm.company_id');
-    const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+    const warehouseId = c.req.query('warehouse_id')?.trim();
+    const rawLimit = c.req.query('limit')?.trim();
+    const params: Array<string | number | null> = [...scopeWhere.params];
+    const conditions = [scopeWhere.clause];
+
+    if (warehouseId) {
+      conditions.push('(m.from_warehouse_id = ? OR m.to_warehouse_id = ?)');
+      params.push(warehouseId, warehouseId);
+    }
+
+    let limitClause = '';
+    if (rawLimit) {
+      const parsedLimit = Number.parseInt(rawLimit, 10);
+      if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+        return c.json({ success: false, error: 'limit must be a positive integer' }, 400);
+      }
+      limitClause = 'LIMIT ?';
+      params.push(Math.min(parsedLimit, 200));
+    }
 
     const { results } = await c.env.DB.prepare(`
       SELECT m.*,
         fw.name as from_warehouse_name, tw.name as to_warehouse_name,
         fz.name as from_zone_name, tz.name as to_zone_name,
         p.part_number, p.model_name,
-        u.name as created_by_name
+        u.name as created_by_name,
+        t.date as transaction_date,
+        t.movement_type as transaction_movement_type,
+        t.po_number as transaction_po_number
       FROM inventory_movements m
       LEFT JOIN warehouses fw ON m.from_warehouse_id = fw.id
       LEFT JOIN warehouses tw ON m.to_warehouse_id = tw.id
@@ -557,10 +578,14 @@ warehouseRoutes.get('/movements/list', requirePermission(Permission.VIEW_WAREHOU
       LEFT JOIN warehouse_zones tz ON m.to_zone_id = tz.id
       JOIN parts p ON m.part_id = p.id
       LEFT JOIN users u ON m.created_by = u.id
-      WHERE ${scopeWhere.clause}
-      ORDER BY m.created_at DESC
-      LIMIT ?
-    `).bind(...scopeWhere.params, limit).all();
+      LEFT JOIN transactions t
+        ON m.transaction_id = t.id
+       AND COALESCE(t.tenant_id, '') = COALESCE(m.tenant_id, '')
+       AND COALESCE(t.company_id, '') = COALESCE(m.company_id, '')
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(m.effective_at, m.created_at) DESC, m.created_at DESC, m.id DESC
+      ${limitClause}
+    `).bind(...params).all();
 
     return c.json({ success: true, movements: results || [] });
   } catch (err: any) {

@@ -98,7 +98,10 @@ interface MockInventoryItem {
 interface MockMovement {
   id: string;
   movement_type: string;
+  from_warehouse_id: string | null;
+  to_warehouse_id: string | null;
   part_number: string;
+  model_name: string | null;
   quantity: number;
   condition: string;
   from_warehouse_name: string | null;
@@ -107,7 +110,12 @@ interface MockMovement {
   to_zone_name: string | null;
   reference: string | null;
   notes: string | null;
+  created_by_name: string | null;
   created_at: string;
+  transaction_id: string | null;
+  transaction_date: string | null;
+  transaction_movement_type: string | null;
+  transaction_po_number: string | null;
 }
 
 interface MockProject {
@@ -363,7 +371,10 @@ export function createMockState(): MockState {
       {
         id: 'movement-1',
         movement_type: 'Receive',
+        from_warehouse_id: null,
+        to_warehouse_id: 'warehouse-main',
         part_number: 'ANT-001',
+        model_name: '5G Panel Antenna',
         quantity: 20,
         condition: 'NIB',
         from_warehouse_name: null,
@@ -372,7 +383,12 @@ export function createMockState(): MockState {
         to_zone_name: 'Receiving',
         reference: 'PO-2026-001',
         notes: 'Initial stock',
+        created_by_name: 'Admin User',
         created_at: '2026-06-12T08:00:00Z',
+        transaction_id: 'transaction-1',
+        transaction_date: '2026-06-14',
+        transaction_movement_type: 'Purchase',
+        transaction_po_number: 'PO-2026-001',
       },
     ],
     transactions: [
@@ -991,7 +1007,15 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
   }
 
   if (path === '/api/warehouses/movements/list') {
-    await respond(route, { success: true, movements: state.movements });
+    const warehouseId = url.searchParams.get('warehouse_id');
+    const requestedLimit = Number.parseInt(url.searchParams.get('limit') || '', 10);
+    let movements = warehouseId
+      ? state.movements.filter((movement) => movement.from_warehouse_id === warehouseId || movement.to_warehouse_id === warehouseId)
+      : [...state.movements];
+    if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
+      movements = movements.slice(0, requestedLimit);
+    }
+    await respond(route, { success: true, movements });
     return;
   }
 
@@ -1017,7 +1041,10 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
     const movement: MockMovement = {
       id: `movement-${state.movements.length + 1}`,
       movement_type: body.movement_type || 'Receive',
+      from_warehouse_id: body.from_warehouse_id || null,
+      to_warehouse_id: body.to_warehouse_id || null,
       part_number: part?.part_number || 'UNKNOWN',
+      model_name: part?.model_name || null,
       quantity,
       condition: body.condition || 'NIB',
       from_warehouse_name: fromWarehouse?.name || null,
@@ -1026,7 +1053,12 @@ async function handleApiRoute(route: Route, state: MockState, url: URL, actor: R
       to_zone_name: toZone?.name || null,
       reference: nullableText(body.reference),
       notes: nullableText(body.notes),
+      created_by_name: 'Admin User',
       created_at: '2026-06-23T08:00:00Z',
+      transaction_id: null,
+      transaction_date: null,
+      transaction_movement_type: null,
+      transaction_po_number: null,
     };
     state.movements.unshift(movement);
     if (part && toWarehouse) {
